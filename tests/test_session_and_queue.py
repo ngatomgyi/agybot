@@ -382,6 +382,7 @@ async def test_thinking_actively_edits_single_message_in_place(monkeypatch):
     assert mock_bot.edit_message_text.call_count == 1
     edit_kwargs = mock_bot.edit_message_text.call_args.kwargs
     assert edit_kwargs["message_id"] == 777
+    assert "message_thread_id" not in edit_kwargs
     # Both thoughts are present in the edited message
     assert "Analyzing code" in edit_kwargs["text"]
     assert "Found the solution" in edit_kwargs["text"]
@@ -448,3 +449,75 @@ async def test_status_edit_cooldown_prevents_api_flood():
     _last_status_edit_time[(user_id, thread_id)] = 0.0
     await _process_status_task(mock_bot, user_id, task)
     assert mock_bot.edit_message_text.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_draining_lagging_thinking_tasks_on_final_text_delivery():
+    from agybot.handlers.message_queue import (
+        _process_content_task,
+        clear_thought_msg_info,
+        get_message_queue,
+    )
+    from agybot.session import session_manager
+
+    user_id = 99887766
+    thread_id = 777888
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+    clear_thought_msg_info(user_id, thread_id)
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot.delete_message = AsyncMock()
+
+    queue = get_message_queue(user_id, mock_bot)
+
+    # Put a lagging thinking task in the user queue
+    lagging_thought = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=["💭 Stale thought chunk that arrived late"],
+        thread_id=thread_id,
+    )
+    queue.put_nowait(lagging_thought)
+    assert queue.qsize() == 1
+
+    # Now deliver final text task
+    text_task = MessageTask(
+        task_type="content",
+        content_type="text",
+        parts=["Final output for the user."],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, text_task)
+
+    # The lagging thinking task MUST be drained/discarded from queue!
+    assert queue.qsize() == 0
+
+
+def test_thought_persistence_roundtrip(tmp_path, monkeypatch):
+    from agybot.handlers.message_queue import (
+        ThoughtMessageInfo,
+        _load_thought_msg_info,
+        _save_thought_msg_info,
+        _thought_msg_info,
+    )
+    from agybot.config import config
+
+    monkeypatch.setattr(config, "config_dir", tmp_path)
+
+    _thought_msg_info.clear()
+    _thought_msg_info[(123, 456)] = ThoughtMessageInfo(
+        message_id=999,
+        thoughts=["Thinking part 1", "Thinking part 2"],
+        last_edit_time=12345.67,
+        chat_id=123,
+    )
+    _save_thought_msg_info()
+
+    # Load in new dict
+    loaded = _load_thought_msg_info()
+    assert (123, 456) in loaded
+    assert loaded[(123, 456)].message_id == 999
+    assert loaded[(123, 456)].thoughts == ["Thinking part 1", "Thinking part 2"]
+    assert loaded[(123, 456)].chat_id == 123
+

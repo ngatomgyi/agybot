@@ -56,6 +56,7 @@ async def safe_edit(message: Any, text: str, **kwargs: Any) -> Message | None:
     """Edit message text with formatting fallback."""
     if not message or not hasattr(message, "edit_text"):
         return None
+    kwargs.pop("message_thread_id", None)
     return await send_with_fallback(message.edit_text, text, **kwargs)
 
 
@@ -76,6 +77,8 @@ async def safe_edit_message(
     **kwargs: Any,
 ) -> Message | None:
     """Edit message text by chat_id and message_id with formatting fallback."""
+    # Strip parameters not supported by Telegram edit_message_text
+    kwargs.pop("message_thread_id", None)
 
     async def _edit(t: str, *args: Any, **kw: Any) -> Message:
         return await bot.edit_message_text(

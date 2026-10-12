@@ -111,15 +111,64 @@ class ThoughtMessageInfo:
     message_id: int
     thoughts: list[str]
     last_edit_time: float = 0.0
+    chat_id: int = 0
+
+
+def _get_thought_store_path() -> Path:
+    from ..config import config
+
+    return config.config_dir / "thought_msg_info.json"
+
+
+def _load_thought_msg_info() -> dict[tuple[int, int], ThoughtMessageInfo]:
+    path = _get_thought_store_path()
+    if not path.exists():
+        return {}
+    try:
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return {}
+        data = json.loads(content)
+        res: dict[tuple[int, int], ThoughtMessageInfo] = {}
+        for k, v in data.items():
+            u_str, t_str = k.split(":")
+            res[(int(u_str), int(t_str))] = ThoughtMessageInfo(
+                message_id=int(v.get("message_id", 0)),
+                thoughts=list(v.get("thoughts", [])),
+                last_edit_time=float(v.get("last_edit_time", 0.0)),
+                chat_id=int(v.get("chat_id", 0)),
+            )
+        return res
+    except Exception as e:
+        logger.debug("Could not load thought_msg_info from disk: %s", e)
+        return {}
+
+
+def _save_thought_msg_info() -> None:
+    path = _get_thought_store_path()
+    try:
+        data = {
+            f"{u}:{t}": {
+                "message_id": info.message_id,
+                "thoughts": info.thoughts,
+                "last_edit_time": info.last_edit_time,
+                "chat_id": info.chat_id,
+            }
+            for (u, t), info in _thought_msg_info.items()
+        }
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.debug("Could not save thought_msg_info to disk: %s", e)
 
 
 # (user_id, thread_id_or_0) -> ThoughtMessageInfo
-_thought_msg_info: dict[tuple[int, int], ThoughtMessageInfo] = {}
+_thought_msg_info: dict[tuple[int, int], ThoughtMessageInfo] = _load_thought_msg_info()
 
 
 def clear_thought_msg_info(user_id: int, thread_id: int | None = None) -> None:
     """Clear thought message tracking for a topic."""
     _thought_msg_info.pop((user_id, thread_id or 0), None)
+    _save_thought_msg_info()
 
 
 def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
@@ -136,6 +185,33 @@ def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
             break
         task_tid = task.thread_id or 0
         if task_tid == tid:
+            queue.task_done()
+        else:
+            remaining.append(task)
+    for task in remaining:
+        queue.put_nowait(task)
+
+
+def _drain_thinking_tasks_for_thread(
+    user_id: int, thread_id: int | None = None
+) -> None:
+    """Drain and discard pending thinking tasks for a specific thread."""
+    queue = _user_queues.get(user_id)
+    if not queue or queue.empty():
+        return
+    tid = thread_id or 0
+    remaining: list[MessageTask] = []
+    while not queue.empty():
+        try:
+            task = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        task_tid = task.thread_id or 0
+        if (
+            task_tid == tid
+            and task.task_type == "content"
+            and task.content_type == "thinking"
+        ):
             queue.task_done()
         else:
             remaining.append(task)
@@ -179,10 +255,13 @@ async def cleanup_status_for_thread(
     for k in thought_keys:
         t_info = _thought_msg_info.pop(k, None)
         if t_info:
+            target_chat = t_info.chat_id or chat_id
             try:
-                await bot.delete_message(chat_id=chat_id, message_id=t_info.message_id)
+                await bot.delete_message(chat_id=target_chat, message_id=t_info.message_id)
             except Exception as e:
-                logger.debug("Could not delete thought message: %s", e)
+                logger.info("Could not delete thought message %d: %s", t_info.message_id, e)
+    if thought_keys:
+        _save_thought_msg_info()
 
 
 @dataclass
@@ -479,6 +558,8 @@ async def _process_thinking_task(
 
     msg_kwargs = {**common_kwargs, "link_preview_options": NO_LINK_PREVIEW}
 
+    edit_kwargs = {k: v for k, v in msg_kwargs.items() if k != "message_thread_id"}
+
     if info is not None:
         now = asyncio.get_event_loop().time()
         if now - info.last_edit_time < THOUGHT_EDIT_COOLDOWN:
@@ -492,11 +573,12 @@ async def _process_thinking_task(
                 chat_id=chat_id,
                 message_id=info.message_id,
                 text=combined_text,
-                **msg_kwargs,
+                **edit_kwargs,
             )
             if res:
                 info.thoughts = current_thoughts
                 info.last_edit_time = now
+                _save_thought_msg_info()
             return
         except BadRequest as e:
             err_str = str(e).lower()
@@ -507,8 +589,11 @@ async def _process_thinking_task(
                 or "message can't be edited" in err_str
             ):
                 _thought_msg_info.pop(key, None)
+                _save_thought_msg_info()
             else:
-                logger.debug("Could not edit thought message: %s", e)
+                logger.warning("Could not edit thought message: %s", e)
+        except Exception as e:
+            logger.warning("Unexpected error editing thought message: %s", e)
 
     # Send new thought message and track it for this turn
     try:
@@ -518,9 +603,11 @@ async def _process_thinking_task(
                 message_id=sent.message_id,
                 thoughts=current_thoughts,
                 last_edit_time=asyncio.get_event_loop().time(),
+                chat_id=chat_id,
             )
+            _save_thought_msg_info()
     except Exception as e:
-        logger.debug("Could not send thought message: %s", e)
+        logger.warning("Could not send thought message: %s", e)
 
 
 async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
@@ -543,6 +630,9 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         await _process_thinking_task(bot, chat_id, user_id, task, common_kwargs)
         return
 
+    # Drain any remaining thinking tasks for this thread from queue so stale thoughts cannot pop up after final text
+    _drain_thinking_tasks_for_thread(user_id, task.thread_id)
+
     # Ephemeral thought messages: delete when final content is delivered
     tid = task.thread_id or 0
     thought_keys = [
@@ -551,10 +641,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     for k in thought_keys:
         t_info = _thought_msg_info.pop(k, None)
         if t_info:
+            target_chat = t_info.chat_id or chat_id
             try:
-                await bot.delete_message(chat_id=chat_id, message_id=t_info.message_id)
+                await bot.delete_message(chat_id=target_chat, message_id=t_info.message_id)
             except Exception as e:
-                logger.debug("Could not delete ephemeral thought message: %s", e)
+                logger.info("Could not delete ephemeral thought message %d: %s", t_info.message_id, e)
+    if thought_keys:
+        _save_thought_msg_info()
 
     # Ephemeral status messages: delete/disappear when final content is delivered
     matched_keys = [
