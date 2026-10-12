@@ -91,11 +91,30 @@ class TranscriptParser:
                     summary = v
                     break
 
+        # Determine human-friendly action label
+        action = f"**{name}…**"
+        if name in ("run_command", "execute_command"):
+            action = "**Running command…**"
+        elif name in ("view_file", "read_file"):
+            action = "**Reading files…**"
+        elif name in ("replace_file_content", "edit_file"):
+            action = "**Editing files…**"
+        elif name == "write_to_file":
+            action = "**Writing files…**"
+        elif name == "search_web":
+            action = "**Searching web…**"
+        elif name == "read_url_content":
+            action = "**Reading URL…**"
+        elif name == "invoke_subagent":
+            action = "**Running subagent…**"
+        elif name == "ask_question":
+            action = "**Asking question…**"
+
         if summary:
             if len(summary) > cls._MAX_SUMMARY_LENGTH:
                 summary = summary[: cls._MAX_SUMMARY_LENGTH] + "…"
-            return f"**{name}**({summary})"
-        return f"**{name}**"
+            return f"{action} {summary}"
+        return action
 
     @classmethod
     def parse_entry(cls, data: dict[str, Any]) -> list[ParsedEntry]:

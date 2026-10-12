@@ -11,8 +11,10 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from telegram import Bot
@@ -49,13 +51,73 @@ class MessageTask:
 _user_queues: dict[int, asyncio.Queue[MessageTask]] = {}
 # user_id -> Task
 _worker_tasks: dict[int, asyncio.Task[None]] = {}
+
+
+def _get_status_store_path() -> Path:
+    from ..config import config
+
+    return config.config_dir / "status_msg_info.json"
+
+
+def _load_status_msg_info() -> dict[tuple[int, int], tuple[int, str]]:
+    path = _get_status_store_path()
+    if not path.exists():
+        return {}
+    try:
+        content = path.read_text(encoding="utf-8")
+        if not content.strip():
+            return {}
+        data = json.loads(content)
+        res: dict[tuple[int, int], tuple[int, str]] = {}
+        for k, v in data.items():
+            u_str, t_str = k.split(":")
+            res[(int(u_str), int(t_str))] = (int(v[0]), str(v[1]))
+        return res
+    except Exception as e:
+        logger.debug("Could not load status_msg_info from disk: %s", e)
+        return {}
+
+
+def _save_status_msg_info() -> None:
+    path = _get_status_store_path()
+    try:
+        data = {f"{u}:{t}": list(v) for (u, t), v in _status_msg_info.items()}
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.debug("Could not save status_msg_info to disk: %s", e)
+
+
 # (user_id, thread_id_or_0) -> (message_id, current_text)
-_status_msg_info: dict[tuple[int, int], tuple[int, str]] = {}
+_status_msg_info: dict[tuple[int, int], tuple[int, str]] = _load_status_msg_info()
 
 
 def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
     """Clear status message tracking for a topic."""
     _status_msg_info.pop((user_id, thread_id or 0), None)
+    _save_status_msg_info()
+
+
+async def cleanup_status_for_thread(
+    bot: Bot, user_id: int, thread_id: int | None = None
+) -> None:
+    """Delete any active or orphaned status message for this thread."""
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    if not chat_id:
+        return
+    tid = thread_id or 0
+    matched_keys = [
+        k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
+    ]
+    for k in matched_keys:
+        info = _status_msg_info.pop(k, None)
+        if info:
+            msg_id, _ = info
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                logger.debug("Could not delete status message: %s", e)
+    if matched_keys:
+        _save_status_msg_info()
 
 
 def get_message_queue(user_id: int, bot: Bot) -> asyncio.Queue[MessageTask]:
@@ -260,6 +322,8 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 await bot.delete_message(chat_id=chat_id, message_id=msg_id)
             except Exception as e:
                 logger.debug("Could not delete ephemeral status message: %s", e)
+    if matched_keys:
+        _save_status_msg_info()
 
     common_kwargs: dict[str, Any] = {}
     if task.thread_id is not None:
@@ -309,6 +373,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                 parse_mode="Markdown",
             )
             _status_msg_info[key] = (msg_id, display_text)
+            _save_status_msg_info()
             return
         except BadRequest as e:
             err_str = str(e).lower()
@@ -316,6 +381,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                 return
             if "message to edit not found" in err_str or "message can't be edited" in err_str:
                 _status_msg_info.pop(key, None)
+                _save_status_msg_info()
             else:
                 try:
                     await bot.edit_message_text(
@@ -324,6 +390,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                         text=f"⚙️ {clean_text}",
                     )
                     _status_msg_info[key] = (msg_id, clean_text)
+                    _save_status_msg_info()
                     return
                 except Exception:
                     pass
@@ -340,6 +407,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
             **send_kwargs,
         )
         _status_msg_info[key] = (msg.message_id, display_text)
+        _save_status_msg_info()
     except BadRequest:
         send_kwargs.pop("parse_mode", None)
         try:
@@ -349,6 +417,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                 **send_kwargs,
             )
             _status_msg_info[key] = (msg.message_id, clean_text)
+            _save_status_msg_info()
         except Exception as ex:
             logger.debug("Could not send fallback status message: %s", ex)
     except Exception as e:

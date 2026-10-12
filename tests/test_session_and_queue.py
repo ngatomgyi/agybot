@@ -146,3 +146,34 @@ async def test_update_status_message_does_not_enqueue_generic_status(monkeypatch
 
     if 1227075616 in _user_queues:
         assert _user_queues[1227075616].empty()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_status_for_thread():
+    from agybot.handlers.message_queue import (
+        cleanup_status_for_thread,
+        _status_msg_info,
+        _save_status_msg_info,
+        _load_status_msg_info,
+    )
+    from agybot.session import session_manager
+
+    session_manager.group_chat_ids = {
+        "1227075616:178763": 1227075616,
+    }
+
+    mock_bot = MagicMock()
+    mock_bot.delete_message = AsyncMock()
+
+    _status_msg_info[(1227075616, 178763)] = (200, "⚙️ `Running command… ls`")
+    _save_status_msg_info()
+
+    # Verify loaded from disk
+    loaded = _load_status_msg_info()
+    assert (1227075616, 178763) in loaded
+
+    # Cleanup should delete message and remove from tracking
+    await cleanup_status_for_thread(mock_bot, 1227075616, 178763)
+    mock_bot.delete_message.assert_called_once_with(chat_id=1227075616, message_id=200)
+    assert (1227075616, 178763) not in _status_msg_info
+

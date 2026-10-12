@@ -70,6 +70,7 @@ from .handlers.directory_browser import (
 from .handlers.history import send_history
 from .handlers.interactive_ui import handle_interactive_callback
 from .handlers.message_queue import (
+    cleanup_status_for_thread,
     enqueue_content_message,
     enqueue_status_update,
 )
@@ -419,6 +420,7 @@ async def handle_inbound_message(
         return
 
     wid = session_manager.get_window_for_thread(thread_id)
+    await cleanup_status_for_thread(context.bot, user.id, thread_id)
 
     # Process attachment if photo or document
     prompt_text = raw_text
@@ -832,7 +834,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if not msg.text:
             return
         if msg.content_type == "thinking":
-            status_text = "Thinking..."
+            status_text = "Thinking…"
         else:
             status_text = msg.text.replace("**", "").strip()
 
