@@ -18,6 +18,11 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest, RetryAfter
 
 from ..markdown_v2 import convert_markdown
+from ..telegram_sender import (
+    TELEGRAM_MAX_MESSAGE_LENGTH,
+    split_markdown_for_telegram,
+    utf16_len,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +40,33 @@ async def send_with_fallback(
     converted = convert_markdown(text)
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
 
+    # Pre-check: if rendered MarkdownV2 exceeds Telegram limit, fall back to plain text if plain text fits
+    if utf16_len(converted) > TELEGRAM_MAX_MESSAGE_LENGTH:
+        if utf16_len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            logger.warning(
+                "Rendered MarkdownV2 (%d code units) exceeds limit, sending plain text (%d code units)",
+                utf16_len(converted),
+                utf16_len(text),
+            )
+            kwargs.pop("parse_mode", None)
+            return await send_fn(text, *args, **kwargs)
+
     try:
         return await send_fn(converted, *args, parse_mode=PARSE_MODE, **kwargs)
     except BadRequest as e:
-        if "can't parse entities" in str(e).lower() or "entity" in str(e).lower():
+        err_str = str(e).lower()
+        if "can't parse entities" in err_str or "entity" in err_str:
             logger.warning("MarkdownV2 parsing failed (%s), sending plain text", e)
             kwargs.pop("parse_mode", None)
             return await send_fn(text, *args, **kwargs)
+        if "message is too long" in err_str:
+            if utf16_len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+                logger.warning(
+                    "Telegram rejected MarkdownV2 as too long, sending plain text (%d code units)",
+                    utf16_len(text),
+                )
+                kwargs.pop("parse_mode", None)
+                return await send_fn(text, *args, **kwargs)
         raise
 
 
@@ -65,6 +90,13 @@ async def safe_send(bot: Bot, chat_id: int, text: str, **kwargs: Any) -> Message
 
     async def _send(t: str, *args: Any, **kw: Any) -> Message:
         return await bot.send_message(chat_id=chat_id, text=t, *args, **kw)
+
+    chunks = split_markdown_for_telegram(text)
+    if len(chunks) > 1:
+        last_msg = None
+        for chunk in chunks:
+            last_msg = await send_with_fallback(_send, chunk, **kwargs)
+        return last_msg  # type: ignore[return-value]
 
     return await send_with_fallback(_send, text, **kwargs)
 

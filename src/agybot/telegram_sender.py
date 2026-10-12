@@ -9,6 +9,7 @@ Provides:
 from __future__ import annotations
 
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+TELEGRAM_SAFE_RAW_SPLIT_LENGTH = 2500
 _FENCE_CLOSE_RESERVE = 4
 
 
@@ -110,3 +111,35 @@ def split_message(
         chunks.append(current_chunk)
 
     return chunks
+
+
+def split_markdown_for_telegram(
+    text: str,
+    max_converted_len: int = 4000,
+    safe_raw_len: int = TELEGRAM_SAFE_RAW_SPLIT_LENGTH,
+) -> list[str]:
+    """Split markdown text into chunks guaranteed to fit Telegram limits when converted to MarkdownV2.
+
+    Accounts for character expansion caused by MarkdownV2 entity escaping.
+    """
+    from .markdown_v2 import convert_markdown
+
+    if utf16_len(text) <= safe_raw_len:
+        conv = convert_markdown(text)
+        if utf16_len(conv) <= max_converted_len:
+            return [text]
+
+    chunks = split_message(text, max_length=safe_raw_len)
+    final_chunks: list[str] = []
+    for chunk in chunks:
+        conv = convert_markdown(chunk)
+        if utf16_len(conv) <= max_converted_len:
+            final_chunks.append(chunk)
+        else:
+            sub_chunks = split_message(chunk, max_length=1500)
+            for sub in sub_chunks:
+                if utf16_len(convert_markdown(sub)) <= max_converted_len:
+                    final_chunks.append(sub)
+                else:
+                    final_chunks.extend(split_message(sub, max_length=1000))
+    return final_chunks

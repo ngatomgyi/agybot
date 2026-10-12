@@ -807,4 +807,91 @@ async def test_cleanup_turn_on_idle_deletes_status_preserves_thoughts():
     assert (user_id, thread_id) not in _thought_msg_info
 
 
+@pytest.mark.asyncio
+async def test_intermediate_content_preserves_thought_tracking_during_active_tool():
+    from agybot.handlers.message_queue import (
+        MessageTask,
+        ThoughtMessageInfo,
+        _process_content_task,
+        _thought_msg_info,
+        clear_thought_msg_info,
+        get_active_tool,
+        set_active_tool,
+    )
+    from agybot.session import session_manager
+
+    user_id = 998877
+    thread_id = 1122
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+
+    clear_thought_msg_info(user_id, thread_id)
+
+    # 1. Start with an existing thought message in-place
+    _thought_msg_info[(user_id, thread_id)] = ThoughtMessageInfo(
+        message_id=501,
+        thoughts=["Initial thought"],
+        last_edit_time=0.0,
+        chat_id=user_id,
+    )
+
+    # 2. Mark active tool as running (e.g. background command execution)
+    set_active_tool(user_id, thread_id, "Running command…", "measuring disk usage")
+    assert get_active_tool(user_id, thread_id) is not None
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot.edit_message_text = AsyncMock()
+
+    # 3. Intermediate content arrives ("I am measuring disk usage right now...")
+    intermediate_task = MessageTask(
+        task_type="content",
+        content_type="text",
+        parts=["I am measuring disk usage right now."],
+        thread_id=thread_id,
+    )
+
+    await _process_content_task(mock_bot, user_id, intermediate_task)
+
+    # Thought tracking MUST NOT be popped because active tool is still running!
+    assert (user_id, thread_id) in _thought_msg_info
+    assert _thought_msg_info[(user_id, thread_id)].message_id == 501
+    # Active tool context must remain active
+    assert get_active_tool(user_id, thread_id) is not None
+
+    # 4. Subsequent thought in the SAME turn arrives
+    subsequent_thought_task = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=["Subsequent thought in the same turn"],
+        thread_id=thread_id,
+    )
+
+    await _process_content_task(mock_bot, user_id, subsequent_thought_task)
+
+    # It must have edited message 501, NOT called send_message to create a duplicate thought!
+    # Send message was only called once for the intermediate text
+    assert mock_bot.send_message.call_count == 1
+    mock_bot.edit_message_text.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_with_fallback_plain_text_on_too_long():
+    from agybot.handlers.message_sender import send_with_fallback
+    from telegram.constants import ParseMode
+
+    send_fn = AsyncMock()
+
+    # Raw text is 3905 chars (fits in Telegram 4096)
+    # But when filled with reserved characters, MarkdownV2 exceeds 4096 (4400)
+    text = "1. Item test line with punctuation! (sub-details) [ref] *bold* - item.\n" * 55
+    assert len(text) < 4000
+
+    await send_with_fallback(send_fn, text)
+
+    # Verifies send_fn was called with plain text fallback (parse_mode stripped)
+    send_fn.assert_called_once()
+    assert send_fn.call_args.kwargs.get("parse_mode") != ParseMode.MARKDOWN_V2
+    assert send_fn.call_args.args[0] == text
+
+
 

@@ -25,3 +25,24 @@ def test_split_message_preserves_code_blocks():
     assert chunks[0].endswith("```")
     # Second chunk should reopen with ```
     assert chunks[1].startswith("```")
+
+
+def test_split_markdown_for_telegram_expansion():
+    from agybot.markdown_v2 import convert_markdown
+    from agybot.telegram_sender import split_markdown_for_telegram
+
+    # Create text with heavy formatting (tables, bullet points, numbers) that expands significantly
+    lines = ["| Col A | Col B | Col C |", "|---|---|---|"]
+    for i in range(70):
+        lines.append(f"| Item {i}.0 | Details {i}-sub (info) | Value {i}! |")
+    text = "\n".join(lines)
+
+    # Raw length is around 3500 chars, but converted MarkdownV2 would exceed 4500 chars
+    conv_raw = convert_markdown(text)
+    assert utf16_len(conv_raw) > 4000
+
+    chunks = split_markdown_for_telegram(text, max_converted_len=4000)
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        conv_chunk = convert_markdown(chunk)
+        assert utf16_len(conv_chunk) <= 4000

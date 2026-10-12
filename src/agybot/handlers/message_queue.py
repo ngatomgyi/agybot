@@ -696,13 +696,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     for pt in pending_thinking:
         await _process_thinking_task(bot, chat_id, user_id, pt, common_kwargs)
 
-    # Finalize thought message for this turn and keep it permanently sitting above output:
+    # Flush thought message for this turn to keep it up-to-date above output:
     tid = task.thread_id or 0
     thought_keys = [
         k for k in list(_thought_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
     ]
     for k in thought_keys:
-        t_info = _thought_msg_info.pop(k, None)
+        t_info = _thought_msg_info.get(k)
         if t_info and t_info.thoughts:
             combined_inner = "\n\n".join(t_info.thoughts)
             max_inner = 3500
@@ -724,8 +724,16 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     text=combined_text,
                     link_preview_options=NO_LINK_PREVIEW,
                 )
+                t_info.last_edit_time = asyncio.get_event_loop().time()
             except Exception as e:
                 logger.debug("Could not flush final thought text: %s", e)
+
+    # Only pop thought tracking for next turn if agent is NOT actively running tools/commands
+    active_ctx = get_active_tool(user_id, task.thread_id)
+    if not active_ctx:
+        for k in thought_keys:
+            _thought_msg_info.pop(k, None)
+
     if thought_keys:
         _save_thought_msg_info()
 
@@ -744,7 +752,8 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if matched_keys:
         _save_status_msg_info()
 
-    clear_active_tool(user_id, task.thread_id)
+    if not active_ctx:
+        clear_active_tool(user_id, task.thread_id)
 
     # 1. Send text parts
     if task.parts:

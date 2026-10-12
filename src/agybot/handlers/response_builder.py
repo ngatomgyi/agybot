@@ -7,7 +7,7 @@ Prepares paginated response messages:
 
 from __future__ import annotations
 
-from ..telegram_sender import split_message
+from ..telegram_sender import split_markdown_for_telegram
 from ..transcript_parser import TranscriptParser
 
 
@@ -46,7 +46,7 @@ def build_response_parts(
         elif len(text) > max_thinking:
             text = text[:max_thinking] + "\n\n… (thinking truncated)"
 
-    chunks = split_message(text)
+    chunks = split_markdown_for_telegram(text)
     if len(chunks) > 1:
         # Add pagination indicator
         return [
