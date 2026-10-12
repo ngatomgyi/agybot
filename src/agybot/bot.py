@@ -358,6 +358,115 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await safe_reply(update.message, text)
 
 
+MODEL_ALIASES: dict[str, str] = {
+    "low": "gemini-3.8-flash-low",
+    "med": "gemini-3.8-flash-medium",
+    "medium": "gemini-3.8-flash-medium",
+    "high": "gemini-3.8-flash-high",
+    "flash": "gemini-3.8-flash-medium",
+    "flash-low": "gemini-3.8-flash-low",
+    "flash-med": "gemini-3.8-flash-medium",
+    "flash-medium": "gemini-3.8-flash-medium",
+    "flash-high": "gemini-3.8-flash-high",
+    "3.8": "gemini-3.8-flash-medium",
+    "3.8-low": "gemini-3.8-flash-low",
+    "3.8-med": "gemini-3.8-flash-medium",
+    "3.8-medium": "gemini-3.8-flash-medium",
+    "3.8-high": "gemini-3.8-flash-high",
+    "pro": "gemini-3.1-pro-high",
+    "pro-high": "gemini-3.1-pro-high",
+    "pro-low": "gemini-3.1-pro-low",
+    "3.1": "gemini-3.1-pro-high",
+    "sonnet": "claude-sonnet-4-6",
+    "claude": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-6-thinking",
+}
+
+CB_MODEL_PREFIX = "cbm:"
+
+
+def _build_model_keyboard(wid: str) -> InlineKeyboardMarkup:
+    """Build interactive model & reasoning effort selection keyboard."""
+    row1 = [
+        InlineKeyboardButton(
+            "🟢 Low", callback_data=f"{CB_MODEL_PREFIX}gemini-3.8-flash-low:{wid}"
+        ),
+        InlineKeyboardButton(
+            "🟡 Medium",
+            callback_data=f"{CB_MODEL_PREFIX}gemini-3.8-flash-medium:{wid}",
+        ),
+        InlineKeyboardButton(
+            "🔴 High", callback_data=f"{CB_MODEL_PREFIX}gemini-3.8-flash-high:{wid}"
+        ),
+    ]
+    row2 = [
+        InlineKeyboardButton(
+            "⚡ 3.8 Flash",
+            callback_data=f"{CB_MODEL_PREFIX}gemini-3.8-flash-medium:{wid}",
+        ),
+        InlineKeyboardButton(
+            "🧠 3.1 Pro",
+            callback_data=f"{CB_MODEL_PREFIX}gemini-3.1-pro-high:{wid}",
+        ),
+        InlineKeyboardButton(
+            "🎭 Claude Sonnet",
+            callback_data=f"{CB_MODEL_PREFIX}claude-sonnet-4-6:{wid}",
+        ),
+    ]
+    return InlineKeyboardMarkup([row1, row2])
+
+
+async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /model, /models, or /effort command."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    wid = session_manager.get_window_for_thread(thread_id)
+    if not wid:
+        await safe_reply(update.message, "❌ No window bound to this topic.")
+        return
+
+    args = context.args or []
+    if not args:
+        info = await get_live_session_model_info(wid)
+        model_name = info.get("model", "Gemini 3.8 Flash")
+        effort = info.get("effort", "").capitalize() or "Default"
+        mode = info.get("agent_mode", "accept-edits")
+        text = (
+            f"🤖 *Active Model & Reasoning Effort*\n\n"
+            f"• *Model:* `{model_name}`\n"
+            f"• *Effort:* `{effort}`\n"
+            f"• *Mode:* `{mode}`\n\n"
+            f"_Switch effort or model below, or type:_\n"
+            f"`/model medium` · `/model low` · `/model high` · `/model pro`"
+        )
+        await safe_reply(
+            update.message, text, reply_markup=_build_model_keyboard(wid)
+        )
+        return
+
+    req = args[0].strip().lower()
+    target_model = MODEL_ALIASES.get(req, args[0].strip())
+
+    await tmux_manager.send_keys(wid, f"/model {target_model}", enter=True)
+    await asyncio.sleep(0.6)
+
+    info = await get_live_session_model_info(wid)
+    model_name = info.get("model", target_model)
+    effort = info.get("effort", "").capitalize() or "Default"
+    mode = info.get("agent_mode", "accept-edits")
+
+    await safe_reply(
+        update.message,
+        f"✅ *Model Updated Successfully*\n\n"
+        f"• *Model:* `{model_name}`\n"
+        f"• *Effort:* `{effort}`\n"
+        f"• *Mode:* `{mode}`",
+    )
+
+
 async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /queue command to view queued prompts in this topic."""
     user = update.effective_user
@@ -968,6 +1077,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await handle_interactive_callback(update, context, action, wid)
         return
 
+    # 8. Model & Effort selection buttons (cbm:)
+    if data.startswith(CB_MODEL_PREFIX):
+        payload = data[len(CB_MODEL_PREFIX) :]
+        target_model, target_wid = payload.split(":", 1)
+        await query.answer("Switching model...")
+        await tmux_manager.send_keys(target_wid, f"/model {target_model}", enter=True)
+        await asyncio.sleep(0.6)
+        info = await get_live_session_model_info(target_wid)
+        model_name = info.get("model", target_model)
+        effort = info.get("effort", "").capitalize() or "Default"
+        mode = info.get("agent_mode", "accept-edits")
+        text = (
+            f"✅ *Model Updated Successfully*\n\n"
+            f"• *Model:* `{model_name}`\n"
+            f"• *Effort:* `{effort}`\n"
+            f"• *Mode:* `{mode}`\n\n"
+            f"_Switch effort or model below, or type:_\n"
+            f"`/model medium` · `/model low` · `/model high` · `/model pro`"
+        )
+        await safe_edit(
+            query.message, text, reply_markup=_build_model_keyboard(target_wid)
+        )
+        return
+
 
 async def _create_and_bind_window(
     query: Any,
@@ -1193,6 +1326,7 @@ async def post_init(application: Application) -> None:
         BotCommand("artifacts", "Download all session artifacts"),
         BotCommand("esc", "Interrupt current turn (Escape)"),
         BotCommand("clear", "Clear conversation context"),
+        BotCommand("model", "View or switch model & reasoning effort"),
         BotCommand("usage", "Model and token usage statistics"),
         BotCommand("caveman", "Toggle Caveman compressed mode"),
         BotCommand("unbind", "Unbind topic from window"),
@@ -1246,6 +1380,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("unbind", unbind_command))
     app.add_handler(CommandHandler(["kill", "close"], kill_command))
     app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(CommandHandler(["model", "models", "effort"], model_command))
     app.add_handler(CommandHandler("usage", usage_command))
     app.add_handler(CommandHandler("caveman", caveman_command))
     app.add_handler(CommandHandler("queue", queue_command))

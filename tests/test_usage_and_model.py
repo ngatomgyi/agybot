@@ -210,3 +210,135 @@ async def test_usage_command_with_session(tmp_path: Path, monkeypatch):
         assert "Test Conversation" in text
         assert "/root/project" in text
         assert "test-conv-1234" in text
+
+
+@pytest.mark.asyncio
+async def test_model_command_no_args(monkeypatch):
+    from agybot.bot import model_command
+    from agybot.config import config
+
+    monkeypatch.setattr(config, "allowed_users", [12345])
+    session_manager.bind_thread(101, "@1")
+
+    update = MagicMock()
+    update.effective_user.id = 12345
+    update.effective_message.message_thread_id = 101
+    update.message = MagicMock()
+
+    context = MagicMock()
+    context.args = []
+
+    with (
+        patch(
+            "agybot.bot.get_live_session_model_info",
+            AsyncMock(
+                return_value={
+                    "model": "Gemini 3.8 Flash",
+                    "agent_mode": "accept-edits",
+                    "effort": "medium",
+                }
+            ),
+        ),
+        patch("agybot.bot.safe_reply", AsyncMock()) as mock_safe_reply,
+    ):
+        await model_command(update, context)
+
+        mock_safe_reply.assert_called_once()
+        text = mock_safe_reply.call_args[0][1]
+        kwargs = mock_safe_reply.call_args[1]
+
+        assert "Active Model & Reasoning Effort" in text
+        assert "Gemini 3.8 Flash" in text
+        assert "Medium" in text
+        assert "reply_markup" in kwargs
+        assert kwargs["reply_markup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_model_command_with_alias(monkeypatch):
+    from agybot.bot import model_command
+    from agybot.config import config
+
+    monkeypatch.setattr(config, "allowed_users", [12345])
+    session_manager.bind_thread(101, "@1")
+
+    update = MagicMock()
+    update.effective_user.id = 12345
+    update.effective_message.message_thread_id = 101
+    update.message = MagicMock()
+
+    context = MagicMock()
+    context.args = ["medium"]
+
+    with (
+        patch(
+            "agybot.bot.tmux_manager.send_keys", AsyncMock()
+        ) as mock_send_keys,
+        patch(
+            "agybot.bot.get_live_session_model_info",
+            AsyncMock(
+                return_value={
+                    "model": "Gemini 3.8 Flash",
+                    "agent_mode": "accept-edits",
+                    "effort": "medium",
+                }
+            ),
+        ),
+        patch("agybot.bot.safe_reply", AsyncMock()) as mock_safe_reply,
+    ):
+        await model_command(update, context)
+
+        mock_send_keys.assert_called_once_with(
+            "@1", "/model gemini-3.8-flash-medium", enter=True
+        )
+        mock_safe_reply.assert_called_once()
+        text = mock_safe_reply.call_args[0][1]
+        assert "Model Updated Successfully" in text
+        assert "Medium" in text
+
+
+@pytest.mark.asyncio
+async def test_callback_handler_model_selection(monkeypatch):
+    from agybot.bot import CB_MODEL_PREFIX, callback_handler
+    from agybot.config import config
+
+    monkeypatch.setattr(config, "allowed_users", [12345])
+
+    update = MagicMock()
+    update.effective_user.id = 12345
+    query = MagicMock()
+    query.from_user.id = 12345
+    query.data = f"{CB_MODEL_PREFIX}gemini-3.8-flash-low:@1"
+    query.answer = AsyncMock()
+    query.message = MagicMock()
+    update.callback_query = query
+
+    context = MagicMock()
+
+    with (
+        patch(
+            "agybot.bot.tmux_manager.send_keys", AsyncMock()
+        ) as mock_send_keys,
+        patch(
+            "agybot.bot.get_live_session_model_info",
+            AsyncMock(
+                return_value={
+                    "model": "Gemini 3.8 Flash",
+                    "agent_mode": "accept-edits",
+                    "effort": "low",
+                }
+            ),
+        ),
+        patch("agybot.bot.safe_edit", AsyncMock()) as mock_safe_edit,
+    ):
+        await callback_handler(update, context)
+
+        query.answer.assert_called_once_with("Switching model...")
+        mock_send_keys.assert_called_once_with(
+            "@1", "/model gemini-3.8-flash-low", enter=True
+        )
+        mock_safe_edit.assert_called_once()
+        text = mock_safe_edit.call_args[0][1]
+        assert "Model Updated Successfully" in text
+        assert "Low" in text
+
