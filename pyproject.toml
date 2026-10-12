@@ -3,6 +3,9 @@ name = "agybot"
 version = "0.1.0"
 description = "Telegram bot that bridges Telegram Forum topics to Google Antigravity (agy) sessions via tmux windows"
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "ngatomgyi" }]
+keywords = ["antigravity", "telegram", "tmux", "ai-agent", "gemini", "developer-tools"]
 requires-python = ">=3.12"
 dependencies = [
     "python-telegram-bot[rate-limiter]>=21.0",
@@ -13,6 +16,11 @@ dependencies = [
     "aiofiles>=24.0.0",
     "telegramify-markdown>=0.5.0,<1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ngatomgyi/agybot"
+Repository = "https://github.com/ngatomgyi/agybot"
+Issues = "https://github.com/ngatomgyi/agybot/issues"
 
 [project.scripts]
 agybot = "agybot.main:main"
