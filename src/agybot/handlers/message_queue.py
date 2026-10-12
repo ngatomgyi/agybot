@@ -140,15 +140,18 @@ def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
 async def cleanup_status_for_thread(
     bot: Bot, user_id: int, thread_id: int | None = None
 ) -> None:
-    """Delete any active or orphaned status message for this thread."""
+    """Delete any active or orphaned status and thought messages for this thread."""
     clear_active_tool(user_id, thread_id)
-    clear_thought_msg_info(user_id, thread_id)
     drain_tasks_for_thread(user_id, thread_id)
 
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-    if not chat_id:
-        return
     tid = thread_id or 0
+
+    if not chat_id:
+        clear_thought_msg_info(user_id, thread_id)
+        return
+
+    # 1. Delete status message
     matched_keys = [
         k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
     ]
@@ -162,6 +165,18 @@ async def cleanup_status_for_thread(
                 logger.debug("Could not delete status message: %s", e)
     if matched_keys:
         _save_status_msg_info()
+
+    # 2. Delete thought message
+    thought_keys = [
+        k for k in list(_thought_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
+    ]
+    for k in thought_keys:
+        t_info = _thought_msg_info.pop(k, None)
+        if t_info:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=t_info.message_id)
+            except Exception as e:
+                logger.debug("Could not delete thought message: %s", e)
 
 
 @dataclass
@@ -513,11 +528,20 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         await _process_thinking_task(bot, chat_id, user_id, task, common_kwargs)
         return
 
-    # Non-thinking content delivery marks completion of thinking for this turn
-    clear_thought_msg_info(user_id, task.thread_id)
+    # Ephemeral thought messages: delete when final content is delivered
+    tid = task.thread_id or 0
+    thought_keys = [
+        k for k in list(_thought_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
+    ]
+    for k in thought_keys:
+        t_info = _thought_msg_info.pop(k, None)
+        if t_info:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=t_info.message_id)
+            except Exception as e:
+                logger.debug("Could not delete ephemeral thought message: %s", e)
 
     # Ephemeral status messages: delete/disappear when final content is delivered
-    tid = task.thread_id or 0
     matched_keys = [
         k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
     ]

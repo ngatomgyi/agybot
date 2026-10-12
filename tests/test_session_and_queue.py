@@ -385,7 +385,7 @@ async def test_thinking_actively_edits_single_message_in_place(monkeypatch):
     assert "Analyzing code" in edit_kwargs["text"]
     assert "Found the solution" in edit_kwargs["text"]
 
-    # Step 3: Final turn response delivers content and resets thought tracking
+    # Step 3: Final turn response delivers content and deletes thought message
     text_task = MessageTask(
         task_type="content",
         content_type="text",
@@ -394,6 +394,8 @@ async def test_thinking_actively_edits_single_message_in_place(monkeypatch):
     )
     await _process_content_task(mock_bot, user_id, text_task)
 
+    # Thought message 777 was deleted upon final response delivery
+    mock_bot.delete_message.assert_called_with(chat_id=user_id, message_id=777)
     # Tracking cleared for next turn
     assert (user_id, thread_id) not in _thought_msg_info
 
