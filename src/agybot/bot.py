@@ -670,7 +670,7 @@ async def handle_inbound_message(
             context.bot,
             user.id,
             wid,
-            "⠋ Working…",
+            "• Working…",
             thread_id,
         )
         return
@@ -1044,7 +1044,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             detail = ""
 
         set_active_tool(user_id, thread_id, action, detail)
-        status_text = f"⠋ {action}\n{detail}" if detail else f"⠋ {action}"
+        status_text = f"• {action}\n{detail}" if detail else f"• {action}"
 
         await enqueue_status_update(
             bot=bot,

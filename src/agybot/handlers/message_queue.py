@@ -719,10 +719,13 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
     remainder_title = title
     for spinner_char in _SPINNERS:
         if title.startswith(spinner_char):
-            sp = spinner_char
             remainder_title = title[len(spinner_char) :].strip()
+            sp = "•"
             break
-    if not sp and any(title.startswith(ic) for ic in ("🧠", "💭", "⚡", "🔍", "⚙️")):
+    if not sp and (title.startswith("•") or title.startswith("●") or title.startswith("#")):
+        sp = "#" if title.startswith("#") else "•"
+        remainder_title = title[1:].strip()
+    if not sp and any(title.startswith(ic) for ic in ("🧠", "💭", "⚡", "🔍", "⚙️", "✏️", "⏳")):
         sp = title[0]
         remainder_title = title[1:].strip()
     if not sp:

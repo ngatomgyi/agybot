@@ -207,7 +207,7 @@ async def dispatch_next_queued_prompt(
         bot=bot,
         user_id=user_id,
         window_id=wid,
-        status_text="⠋ Working…",
+        status_text="• Working…",
         thread_id=thread_id,
     )
     return True

@@ -55,6 +55,10 @@ async def test_process_content_task_safely_calls_send(monkeypatch):
     mock_bot.send_message = AsyncMock()
     mock_bot.delete_message = AsyncMock()
 
+    from agybot.handlers.message_queue import clear_thought_msg_info
+
+    clear_thought_msg_info(1227075616, 178763)
+
     # Pre-populate active status message
     _status_msg_info[(1227075616, 178763)] = (42, "⚙️ `run_command(git status)`")
 
@@ -109,6 +113,35 @@ async def test_process_status_task_edits_existing_message(monkeypatch):
     )
     assert mock_bot.send_message.call_count == 0
     assert _status_msg_info[(1227075616, 178763)][0] == 100
+
+
+@pytest.mark.asyncio
+async def test_process_status_task_replaces_spinner_with_dot():
+    from agybot.handlers.message_queue import (
+        _process_status_task,
+        clear_status_msg_info,
+    )
+    from agybot.session import session_manager
+
+    user_id = 1227075616
+    thread_id = 987654
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+    clear_status_msg_info(user_id, thread_id)
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=201))
+
+    # Send status with raw Braille 3-dot spinner
+    task = MessageTask(
+        task_type="status",
+        status_text="⠋ Working…",
+        thread_id=thread_id,
+    )
+    await _process_status_task(mock_bot, user_id, task)
+
+    mock_bot.send_message.assert_called_once()
+    sent_text = mock_bot.send_message.call_args.kwargs["text"]
+    assert sent_text == "• *Working…*"
 
 
 def test_try_merge_status_tasks():
