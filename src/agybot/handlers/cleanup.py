@@ -10,6 +10,7 @@ from typing import Any
 
 from telegram import Bot
 
+from .inbound_queue import clear_inbound_queue
 from .interactive_ui import clear_interactive_msg
 from .message_queue import (
     clear_active_tool,
@@ -28,6 +29,7 @@ async def clear_topic_state(
     clear_status_msg_info(user_id, thread_id)
     clear_active_tool(user_id, thread_id)
     drain_tasks_for_thread(user_id, thread_id)
+    clear_inbound_queue(user_id, thread_id)
     await clear_interactive_msg(user_id, bot, thread_id)
 
     if user_data is not None:

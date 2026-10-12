@@ -409,6 +409,11 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if task.document_data:
         await send_document(bot, chat_id, task.document_data, **common_kwargs)
 
+    # 4. Check and dispatch next queued inbound prompt if any
+    from .inbound_queue import dispatch_next_queued_prompt
+
+    await dispatch_next_queued_prompt(bot, user_id, task.thread_id)
+
 
 async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> None:
     """Send or edit status update line in-place."""

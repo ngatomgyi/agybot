@@ -69,6 +69,12 @@ from .handlers.directory_browser import (
     clear_browse_state,
 )
 from .handlers.history import send_history
+from .handlers.inbound_queue import (
+    clear_inbound_queue,
+    get_queued_prompts,
+    is_thread_busy,
+    queue_inbound_prompt,
+)
 from .handlers.interactive_ui import handle_interactive_callback
 from .handlers.message_queue import (
     cleanup_status_for_thread,
@@ -131,7 +137,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• `/unbind` - Unbind topic from window\n"
         "• `/kill` or `/close` - Close/kill tmux window and unbind topic\n"
         "• `/clear` - Clear conversation context\n"
-        "• `/usage` - View session stats\n\n"
+        "• `/usage` - View session stats\n"
+        "• `/queue` - View queued prompts in topic\n"
+        "• `/clearqueue` - Clear queued prompts in topic\n\n"
         "_To get started, create a new Forum Topic in this supergroup and send a message!_"
     )
     await safe_reply(update.message, text)
@@ -151,10 +159,14 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     # Clean up active ephemeral status message, clear tool context, and drain queued tasks
     await cleanup_status_for_thread(context.bot, user.id, thread_id)
+    cleared_prompts = clear_inbound_queue(user.id, thread_id)
 
     success = await tmux_manager.send_interrupt(wid)
     if success:
-        await safe_reply(update.message, "⏹ Sent Escape interrupt to Antigravity.")
+        notice = "⏹ Sent Escape interrupt to Antigravity."
+        if cleared_prompts > 0:
+            notice += f" (Cleared {cleared_prompts} queued prompt{'s' if cleared_prompts > 1 else ''}.)"
+        await safe_reply(update.message, notice)
     else:
         await safe_reply(update.message, "❌ Failed to send interrupt.")
 
@@ -243,6 +255,57 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, text)
     else:
         await safe_reply(update.message, "ℹ️ No session active yet.")
+
+
+async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /queue command to view queued prompts in this topic."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "❌ /queue can only be run in a forum topic.")
+        return
+
+    prompts = get_queued_prompts(user.id, thread_id)
+    if not prompts:
+        await safe_reply(update.message, "ℹ️ No prompts currently queued for this topic.")
+        return
+
+    lines = ["⏳ *Queued Prompts:*"]
+    for i, p in enumerate(prompts, 1):
+        clean_p = p.prompt_text.replace("`", "'")
+        if len(clean_p) > 100:
+            clean_p = clean_p[:97] + "…"
+        lines.append(f"{i}. `{clean_p}`")
+    lines.append("\n_Prompts run in order once current task finishes._")
+    await safe_reply(update.message, "\n".join(lines))
+
+
+async def clear_queue_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /clearqueue command to clear queued prompts in this topic."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(
+            update.message, "❌ /clearqueue can only be run in a forum topic."
+        )
+        return
+
+    cleared = clear_inbound_queue(user.id, thread_id)
+    if cleared:
+        await safe_reply(
+            update.message,
+            f"🧹 Cleared {cleared} queued prompt{'s' if cleared > 1 else ''}.",
+        )
+    else:
+        await safe_reply(update.message, "ℹ️ Queue was already empty.")
 
 
 async def artifacts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -428,7 +491,6 @@ async def handle_inbound_message(
         return
 
     wid = session_manager.get_window_for_thread(thread_id)
-    await cleanup_status_for_thread(context.bot, user.id, thread_id)
 
     # Process attachment if photo or document
     prompt_text = raw_text
@@ -485,8 +547,20 @@ async def handle_inbound_message(
     if not prompt_text:
         return
 
-    # 1. Topic already bound to a window -> forward prompt to tmux
+    # 1. Topic already bound to a window -> forward prompt or queue if busy
     if wid:
+        if is_thread_busy(user.id, thread_id):
+            pos = queue_inbound_prompt(user.id, thread_id, prompt_text)
+            clean_preview = prompt_text
+            if len(clean_preview) > 100:
+                clean_preview = clean_preview[:97] + "…"
+            await safe_reply(
+                msg,
+                f"⏳ *Queued (#{pos})*:\n`{clean_preview}`\n_Will execute automatically once current task completes._",
+            )
+            return
+
+        await cleanup_status_for_thread(context.bot, user.id, thread_id)
         clean_prompt = prompt_text.replace("\n", " ")
         await tmux_manager.send_keys(wid, clean_prompt, enter=True)
         set_active_tool(user.id, thread_id, "Working…", "")
@@ -923,6 +997,8 @@ async def post_init(application: Application) -> None:
         BotCommand("unbind", "Unbind topic from window"),
         BotCommand("kill", "Kill window and unbind topic"),
         BotCommand("close", "Close window and unbind topic"),
+        BotCommand("queue", "View queued prompts in topic"),
+        BotCommand("clearqueue", "Clear queued prompts in topic"),
     ]
     try:
         await application.bot.set_my_commands(commands)
@@ -961,6 +1037,8 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler(["kill", "close"], kill_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("usage", usage_command))
+    app.add_handler(CommandHandler("queue", queue_command))
+    app.add_handler(CommandHandler(["clearqueue", "cq"], clear_queue_command))
     app.add_handler(CommandHandler("artifacts", artifacts_command))
     app.add_handler(CommandHandler("artifact", artifacts_command))
     app.add_handler(CommandHandler("screenshot", screenshot_command))
