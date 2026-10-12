@@ -129,13 +129,36 @@ def _markdownify(text: str) -> str:
         return renderer.render(document)
 
 
+def _format_file_link(m: re.Match[str]) -> str:
+    """Format unsupported file:// links into clean label and basename with line numbers."""
+    from pathlib import Path
+
+    label = m.group(1).strip("`")
+    url = m.group(2)
+    path_part = url.split("://", 1)[-1]
+    fragment = ""
+    if "#" in path_part:
+        path_part, fragment = path_part.split("#", 1)
+        fragment = "#" + fragment
+
+    filename = Path(path_part).name + fragment
+    if label == filename or label == Path(path_part).name:
+        return f"`{filename}`"
+    return f"{label} (`{filename}`)"
+
+
 def convert_markdown(text: str) -> str:
     """Convert standard markdown to Telegram MarkdownV2 format."""
     if not text:
         return ""
 
-    # Clean unsupported file:// URLs [label](file:///path) -> `label`
-    text = re.sub(r"\[`?([^`\]]+)`?\]\(file://[^\)]+\)", r"`\1`", text)
+    # Clean unsupported file:// URLs [label](file:///path) -> label (`basename`)
+    # Regex handles balanced parentheses in paths like src/app/(app)/page.tsx
+    text = re.sub(
+        r"\[`?([^`\]]+)`?\]\(file://((?:[^\s()]|\([^\s()]*\))*)\)",
+        _format_file_link,
+        text,
+    )
     # Ensure blockquotes start at beginning of line
     text = re.sub(r"(?m)^[ \t]+>", ">", text)
 

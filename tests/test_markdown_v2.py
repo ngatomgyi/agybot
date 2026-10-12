@@ -53,3 +53,13 @@ def test_convert_markdown_sanitizes_blockquotes():
     import re
 
     assert not re.search(r"(?<!^)(?<!\n)>", converted)
+
+
+def test_convert_markdown_file_links_with_parenthesis_in_path():
+    text = "Bug in [reports page](file:///root/pa/src/app/(app)/reports/page.tsx#L675-L685)."
+    converted = convert_markdown(text)
+    assert "file://" not in converted
+    assert "page\\.tsx" in converted or "page.tsx" in converted
+    assert "reports page" in converted
+    # Verify no raw unclosed parenthesis suffix like '/reports/page.tsx#L675-L685)'
+    assert "/reports/page.tsx" not in converted
