@@ -342,3 +342,156 @@ async def test_callback_handler_model_selection(monkeypatch):
         assert "Model Updated Successfully" in text
         assert "Low" in text
 
+
+def test_render_quota_progress_bar():
+    from agybot.session import render_quota_progress_bar
+
+    assert render_quota_progress_bar(0.0, 10) == "░░░░░░░░░░"
+    assert render_quota_progress_bar(1.0, 10) == "██████████"
+    assert render_quota_progress_bar(0.5, 10) == "█████░░░░░"
+    assert render_quota_progress_bar(-0.2, 10) == "░░░░░░░░░░"
+    assert render_quota_progress_bar(1.5, 10) == "██████████"
+
+
+def test_format_quota_refresh_time():
+    from datetime import datetime, timedelta, timezone
+    from agybot.session import format_quota_refresh_time
+
+    assert format_quota_refresh_time("") == ""
+    # 2 hours ahead
+    future_2h = datetime.now(timezone.utc) + timedelta(hours=2, minutes=15)
+    res = format_quota_refresh_time(future_2h.isoformat())
+    assert "2h 1" in res or "2h 15m" in res or "2h 14m" in res
+
+    # Past time
+    past = datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert format_quota_refresh_time(past.isoformat()) == "Refreshes shortly"
+
+
+def test_parse_quota_from_pane():
+    from agybot.session import parse_quota_from_pane
+
+    pane_text = (
+        "└ Models & Quota\n\n"
+        "  Account: user@example.com\n\n"
+        "GEMINI MODELS\n"
+        "  Models within this group: Gemini Flash, Gemini Pro\n\n"
+        "  Weekly Limit Remaining\n"
+        "    [████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 40.00%\n"
+        "    Refreshes in 71h 14m\n\n"
+        "  Five Hour Limit Remaining\n"
+        "    [██████████████████████████████████░░░░░░░░░░░░░░░░] 68.00%\n"
+        "    Refreshes in 3h 36m\n"
+    )
+
+    groups = parse_quota_from_pane(pane_text)
+    assert len(groups) == 1
+    g = groups[0]
+    assert g["group"] == "GEMINI MODELS"
+    assert "Gemini Flash" in g["desc"]
+    assert len(g["buckets"]) == 2
+    assert g["buckets"][0]["name"] == "Weekly Limit Remaining"
+    assert g["buckets"][0]["percentage"] == "40.00%"
+    assert g["buckets"][0]["refresh"] == "Refreshes in 71h 14m"
+
+
+def test_format_quota_markdown():
+    from agybot.session import format_quota_markdown
+
+    groups = [
+        {
+            "group": "Gemini Models",
+            "desc": "Models within this group: Gemini Flash, Gemini Pro",
+            "buckets": [
+                {
+                    "name": "Weekly Limit Remaining",
+                    "percentage": "40.0%",
+                    "bar": "██████░░░░░░░░░",
+                    "refresh": "Refreshes in 71h 14m",
+                }
+            ],
+        }
+    ]
+
+    md = format_quota_markdown(groups)
+    assert "Usage Limits & Quota Remaining" in md
+    assert "Gemini Models" in md
+    assert "Gemini Flash, Gemini Pro" in md
+    assert "Weekly Limit" in md
+    assert "40.0%" in md
+    assert "Refreshes in 71h 14m" in md
+
+
+@pytest.mark.asyncio
+async def test_usage_command_with_quota(tmp_path: Path, monkeypatch):
+    from agybot.bot import usage_command
+    from agybot.config import config
+
+    monkeypatch.setattr(config, "allowed_users", [12345])
+    session_manager.bind_thread(101, "@1")
+
+    transcript_file = tmp_path / "transcript.jsonl"
+    transcript_file.write_text("{}", encoding="utf-8")
+
+    mock_session = AgySession(
+        session_id="test-conv-quota",
+        summary="Test Session",
+        message_count=5,
+        file_path=str(transcript_file),
+        cwd="/root/agybot",
+    )
+
+    update = MagicMock()
+    update.effective_user.id = 12345
+    update.effective_message.message_thread_id = 101
+    update.message = MagicMock()
+
+    context = MagicMock()
+
+    mock_quota_groups = [
+        {
+            "group": "Gemini Models",
+            "desc": "Models within this group: Gemini Flash, Gemini Pro",
+            "buckets": [
+                {
+                    "name": "Weekly Limit Remaining",
+                    "percentage": "39.8%",
+                    "bar": "██████░░░░░░░░░",
+                    "refresh": "Refreshes in 71h 11m",
+                }
+            ],
+        }
+    ]
+
+    with (
+        patch.object(
+            session_manager,
+            "resolve_session_for_window",
+            AsyncMock(return_value=mock_session),
+        ),
+        patch(
+            "agybot.bot.get_live_session_model_info",
+            AsyncMock(
+                return_value={
+                    "model": "Gemini 3.8 Flash",
+                    "agent_mode": "accept-edits",
+                    "effort": "medium",
+                }
+            ),
+        ),
+        patch(
+            "agybot.bot.get_antigravity_quota_info",
+            AsyncMock(return_value=mock_quota_groups),
+        ),
+        patch("agybot.bot.safe_reply", AsyncMock()) as mock_safe_reply,
+    ):
+        await usage_command(update, context)
+
+        mock_safe_reply.assert_called_once()
+        text = mock_safe_reply.call_args[0][1]
+        assert "Session & Model Usage" in text
+        assert "Usage Limits & Quota Remaining" in text
+        assert "Gemini Models" in text
+        assert "39.8%" in text
+
+

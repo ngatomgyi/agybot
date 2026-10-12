@@ -98,6 +98,8 @@ from .caveman import (
 )
 from .screenshot import text_to_image_async
 from .session import (
+    format_quota_markdown,
+    get_antigravity_quota_info,
     get_live_session_model_info,
     get_session_token_usage,
     session_manager,
@@ -353,6 +355,14 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if session.cwd:
         lines.append(f"• *Workspace:* `{session.cwd}`")
     lines.append(f"• *Session ID:* `{session.session_id}`")
+
+    # Fetch quota limits remaining and refresh countdowns
+    quota_groups = await get_antigravity_quota_info(wid)
+    if quota_groups:
+        quota_text = format_quota_markdown(quota_groups)
+        if quota_text:
+            lines.append("")
+            lines.append(quota_text)
 
     text = "\n".join(lines)
     await safe_reply(update.message, text)
@@ -1327,7 +1337,8 @@ async def post_init(application: Application) -> None:
         BotCommand("esc", "Interrupt current turn (Escape)"),
         BotCommand("clear", "Clear conversation context"),
         BotCommand("model", "View or switch model & reasoning effort"),
-        BotCommand("usage", "Model and token usage statistics"),
+        BotCommand("usage", "Session token usage and remaining quota limits"),
+        BotCommand("quota", "View remaining usage limits and refresh countdowns"),
         BotCommand("caveman", "Toggle Caveman compressed mode"),
         BotCommand("unbind", "Unbind topic from window"),
         BotCommand("kill", "Kill window and unbind topic"),
@@ -1381,7 +1392,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler(["kill", "close"], kill_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler(["model", "models", "effort"], model_command))
-    app.add_handler(CommandHandler("usage", usage_command))
+    app.add_handler(CommandHandler(["usage", "quota"], usage_command))
     app.add_handler(CommandHandler("caveman", caveman_command))
     app.add_handler(CommandHandler("queue", queue_command))
     app.add_handler(CommandHandler(["clearqueue", "cq"], clear_queue_command))

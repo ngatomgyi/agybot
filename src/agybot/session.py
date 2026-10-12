@@ -19,10 +19,12 @@ import re
 import sqlite3
 import subprocess
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import aiofiles
+import httpx
 
 from .config import config
 from .tmux_manager import tmux_manager
@@ -632,3 +634,304 @@ async def get_live_session_model_info(window_id: str | None = None) -> dict[str,
         info["agent_mode"] = cfg_mode
 
     return info
+
+
+def render_quota_progress_bar(fraction: float, length: int = 15) -> str:
+    """Render a progress bar [████████░░░░░░░]."""
+    filled = max(0, min(length, int(round(fraction * length))))
+    return "█" * filled + "░" * (length - filled)
+
+
+def format_quota_refresh_time(reset_time_str: str) -> str:
+    """Format an ISO timestamp into a user-friendly refresh delay."""
+    if not reset_time_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(reset_time_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = dt - now
+        secs = int(diff.total_seconds())
+        if secs <= 0:
+            return "Refreshes shortly"
+        hours = secs // 3600
+        mins = (secs % 3600) // 60
+        days = hours // 24
+        rem_hours = hours % 24
+        if days > 0:
+            return f"Refreshes in {hours}h {mins}m ({days}d {rem_hours}h)"
+        return f"Refreshes in {hours}h {mins}m"
+    except Exception:
+        return ""
+
+
+def parse_quota_from_pane(text: str) -> list[dict[str, Any]]:
+    """Parse Models & Quota modal text captured from tmux pane."""
+    groups: list[dict[str, Any]] = []
+    group_chunks = re.split(r"\n(?=[A-Z\s]{4,}(?:MODELS)?\n)", text)
+    for chunk in group_chunks:
+        lines = [line.strip() for line in chunk.strip().splitlines() if line.strip()]
+        if not lines:
+            continue
+        header = lines[0]
+        if not ("MODELS" in header or "GEMINI" in header or "CLAUDE" in header):
+            continue
+        group_name = header
+        desc = ""
+        buckets = []
+        i = 1
+        while i < len(lines):
+            cur_line = lines[i]
+            if cur_line.startswith("Models within this group:"):
+                desc = cur_line
+                i += 1
+                continue
+            if "Limit Remaining" in cur_line:
+                b_name = cur_line
+                bar_line = lines[i + 1] if i + 1 < len(lines) else ""
+                ref_line = lines[i + 2] if i + 2 < len(lines) else ""
+                pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", bar_line)
+                pct = pct_match.group(1) + "%" if pct_match else ""
+                bar_match = re.search(r"\[([█░]+)\]", bar_line)
+                bar = bar_match.group(1) if bar_match else ""
+                buckets.append({
+                    "name": b_name,
+                    "percentage": pct,
+                    "bar": bar,
+                    "refresh": (
+                        ref_line
+                        if ("Refresh" in ref_line or "Quota" in ref_line)
+                        else ""
+                    ),
+                })
+                i += 3
+                continue
+            i += 1
+        if buckets:
+            groups.append({
+                "group": group_name,
+                "desc": desc,
+                "buckets": buckets,
+            })
+    return groups
+
+
+_cached_ls_address: str | None = None
+_cached_csrf_token: str | None = None
+
+
+async def _discover_antigravity_ls() -> tuple[str | None, str | None]:
+    """Discover active Language Server Connect endpoint address and CSRF token."""
+    global _cached_ls_address, _cached_csrf_token
+
+    # 1. Test cached credentials first
+    if _cached_ls_address and _cached_csrf_token:
+        try:
+            url = (
+                f"http://{_cached_ls_address}/"
+                "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+            )
+            async with httpx.AsyncClient(timeout=1.5) as client:
+                r = await client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-codeium-csrf-token": _cached_csrf_token,
+                    },
+                    json={},
+                )
+                if r.status_code == 200:
+                    return _cached_ls_address, _cached_csrf_token
+        except Exception:
+            _cached_ls_address = None
+            _cached_csrf_token = None
+
+    # 2. Check current process environment
+    env_addr = os.environ.get("ANTIGRAVITY_LS_ADDRESS")
+    env_csrf = os.environ.get("ANTIGRAVITY_CSRF_TOKEN")
+    if env_addr and env_csrf:
+        _cached_ls_address, _cached_csrf_token = env_addr, env_csrf
+        return env_addr, env_csrf
+
+    uuid_re = re.compile(
+        rb"ANTIGRAVITY_CSRF_TOKEN="
+        rb"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    )
+    ls_re = re.compile(rb"ANTIGRAVITY_LS_ADDRESS=(localhost:[0-9]+|127\.0\.0\.1:[0-9]+)")
+
+    tokens: set[str] = set()
+    ports: set[str] = set()
+
+    # 3. Check /proc/*/environ
+    for p in glob.glob("/proc/[0-9]*/environ"):
+        try:
+            with open(p, "rb") as ef:
+                c = ef.read()
+            for m in uuid_re.findall(c):
+                tokens.add(m.decode())
+            for m in ls_re.findall(c):
+                ports.add(m.decode())
+        except Exception:
+            pass
+
+    # 4. If tokens not found in environ, scan memory of running agy processes
+    if not tokens:
+        for cmd_path in glob.glob("/proc/[0-9]*/cmdline"):
+            try:
+                with open(cmd_path, "rb") as cf:
+                    cmd = cf.read()
+                if b"agy" not in cmd or b"agybot" in cmd:
+                    continue
+                pid = cmd_path.split("/")[2]
+                with open(f"/proc/{pid}/maps", "r") as mf:
+                    maps = mf.readlines()
+                with open(f"/proc/{pid}/mem", "rb", 0) as mem:
+                    for line in maps:
+                        parts = line.split()
+                        if "r" not in parts[1]:
+                            continue
+                        start, end = [int(x, 16) for x in parts[0].split("-")]
+                        if end - start > 100 * 1024 * 1024:
+                            continue
+                        try:
+                            mem.seek(start)
+                            c = mem.read(end - start)
+                            for m in uuid_re.findall(c):
+                                tokens.add(m.decode())
+                            for m in ls_re.findall(c):
+                                ports.add(m.decode())
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    token = next(iter(tokens)) if tokens else None
+    port = next(iter(ports)) if ports else None
+
+    if token and port:
+        _cached_ls_address = port
+        _cached_csrf_token = token
+        return port, token
+
+    return None, None
+
+
+async def get_antigravity_quota_info(
+    window_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieve remaining usage quota limits and refresh countdowns.
+
+    Tries Connect-RPC to the local Language Server first.
+    If unavailable and window_id is provided, falls back to querying the live tmux pane.
+    """
+    # 1. Connect-RPC
+    port, token = await _discover_antigravity_ls()
+    if port and token:
+        try:
+            url = (
+                f"http://{port}/"
+                "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+            )
+            async with httpx.AsyncClient(timeout=2.5) as client:
+                r = await client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-codeium-csrf-token": token,
+                    },
+                    json={},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    groups = data.get("response", {}).get("groups", [])
+                    result = []
+                    for g in groups:
+                        g_name = g.get("displayName", "")
+                        g_desc = g.get("description", "")
+                        buckets = []
+                        for b in g.get("buckets", []):
+                            frac = float(b.get("remainingFraction", 0.0))
+                            pct = round(frac * 100, 1)
+                            reset_time = b.get("resetTime", "")
+                            refresh_text = (
+                                "Quota available"
+                                if frac >= 0.999
+                                else format_quota_refresh_time(reset_time)
+                            )
+                            buckets.append({
+                                "name": b.get("displayName", "Limit Remaining"),
+                                "fraction": frac,
+                                "percentage": f"{pct}%",
+                                "bar": render_quota_progress_bar(frac, length=15),
+                                "reset_time": reset_time,
+                                "refresh": refresh_text,
+                                "description": b.get("description", ""),
+                            })
+                        if buckets:
+                            result.append({
+                                "group": g_name,
+                                "desc": g_desc,
+                                "buckets": buckets,
+                            })
+                    if result:
+                        return result
+        except Exception as e:
+            logger.debug("RetrieveUserQuotaSummary RPC error: %s", e)
+
+    # 2. Tmux pane modal fallback
+    if window_id:
+        try:
+            pane_tail = await tmux_manager.capture_pane(
+                window_id, start_line=-8, with_ansi=False
+            )
+            if (
+                "Running command" not in pane_tail
+                and "Thinking..." not in pane_tail
+                and "Working…" not in pane_tail
+            ):
+                await tmux_manager.send_keys(window_id, "/usage", enter=True)
+                await asyncio.sleep(0.4)
+                modal_pane = await tmux_manager.capture_pane(
+                    window_id, start_line=-35, with_ansi=False
+                )
+                await tmux_manager.send_keys(window_id, "Escape", enter=False)
+                parsed = parse_quota_from_pane(modal_pane)
+                if parsed:
+                    return parsed
+        except Exception as e:
+            logger.debug("Tmux modal quota parse error for %s: %s", window_id, e)
+
+    return []
+
+
+def format_quota_markdown(quota_groups: list[dict[str, Any]]) -> str:
+    """Format quota limits and countdowns into readable markdown."""
+    if not quota_groups:
+        return ""
+
+    lines = ["📈 *Usage Limits & Quota Remaining*"]
+    for g in quota_groups:
+        name = g.get("group", "").strip()
+        desc = g.get("desc", "")
+        models_sub = re.sub(
+            r"^Models within this group:\s*", "", desc, flags=re.IGNORECASE
+        ).strip()
+        if models_sub:
+            lines.append(f"\n*{name}* ({models_sub})")
+        else:
+            lines.append(f"\n*{name}*")
+
+        for b in g.get("buckets", []):
+            b_name = b.get("name", "Limit")
+            bar = b.get("bar", "")
+            pct = b.get("percentage", "")
+            refresh = b.get("refresh", "")
+            b_label = b_name.replace(" Remaining", "")
+
+            lines.append(f"• *{b_label}:* `[{bar}]` *{pct}*")
+            if refresh and refresh != "Quota available":
+                lines.append(f"  ⏳ _{refresh}_")
+            elif refresh == "Quota available":
+                lines.append("  ✨ _Quota available_")
+
+    return "\n".join(lines)
+
