@@ -30,6 +30,9 @@ def test_parse_model_thinking_and_content():
     assert entries[0].role == "assistant"
     assert entries[0].content_type == "thinking"
     assert "Planning the architecture" in entries[0].text
+    assert TranscriptParser.EXPANDABLE_QUOTE_START in entries[0].text
+    assert TranscriptParser.EXPANDABLE_QUOTE_END in entries[0].text
+    assert entries[0].text.startswith("💭 *Thought:*\n")
 
     assert entries[1].role == "assistant"
     assert entries[1].content_type == "text"

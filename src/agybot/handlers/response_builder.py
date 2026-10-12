@@ -35,13 +35,14 @@ def build_response_parts(
     if content_type == "thinking" and is_complete:
         start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
         end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
-        max_thinking = 600
+        max_thinking = 3500
 
         if start_tag in text and end_tag in text:
+            prefix = text[: text.index(start_tag)]
             inner = text[text.index(start_tag) + len(start_tag) : text.index(end_tag)]
             if len(inner) > max_thinking:
                 inner = inner[:max_thinking] + "\n\n… (thinking truncated)"
-            text = start_tag + inner + end_tag
+            text = f"{prefix}{start_tag}{inner}{end_tag}"
         elif len(text) > max_thinking:
             text = text[:max_thinking] + "\n\n… (thinking truncated)"
 

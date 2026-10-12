@@ -21,3 +21,18 @@ def test_convert_markdown_basic():
     text = "Hello **world**"
     converted = convert_markdown(text)
     assert "world" in converted
+
+
+def test_convert_markdown_expandable_quote():
+    from agybot.transcript_parser import TranscriptParser
+
+    text = (
+        f"💭 *Thought:*\n"
+        f"{TranscriptParser.EXPANDABLE_QUOTE_START}"
+        f"Thinking deeply about life\nLine 2"
+        f"{TranscriptParser.EXPANDABLE_QUOTE_END}"
+    )
+    converted = convert_markdown(text)
+    assert ">Thinking deeply about life" in converted
+    assert ">Line 2||" in converted
+    assert "Thought" in converted

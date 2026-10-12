@@ -109,4 +109,3 @@ def find_workspace_build_artifacts(
             pass
 
     return sorted(results, key=lambda p: p.stat().st_mtime, reverse=True)
-

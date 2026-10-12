@@ -103,7 +103,10 @@ async def test_process_status_task_edits_existing_message(monkeypatch):
 
     # Should edit message 100 in place
     mock_bot.edit_message_text.assert_called_once()
-    assert mock_bot.edit_message_text.call_args.kwargs["text"] == "⚙️ *Running command…*\n`git diff`"
+    assert (
+        mock_bot.edit_message_text.call_args.kwargs["text"]
+        == "⚙️ *Running command…*\n`git diff`"
+    )
     assert mock_bot.send_message.call_count == 0
     assert _status_msg_info[(1227075616, 178763)][0] == 100
 
@@ -236,3 +239,88 @@ async def test_update_status_message_idle_does_not_enqueue(monkeypatch):
         assert _user_queues[1227075616].empty()
 
 
+def test_try_merge_content_tasks_separates_thinking_from_text():
+    from agybot.handlers.message_queue import _try_merge_content_tasks
+
+    q = asyncio.Queue()
+    t_thinking = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=["💭 *Thought:*\n>Plan||"],
+        thread_id=10,
+    )
+    t_text = MessageTask(
+        task_type="content",
+        content_type="text",
+        parts=["Final answer"],
+        thread_id=10,
+    )
+    q.put_nowait(t_text)
+
+    merged, merge_count = _try_merge_content_tasks(q, t_thinking)
+    assert merge_count == 0
+    assert merged.content_type == "thinking"
+    assert merged.parts == ["💭 *Thought:*\n>Plan||"]
+    assert not q.empty()
+    assert q.get_nowait() == t_text
+
+
+@pytest.mark.asyncio
+async def test_process_content_task_thinking_preserves_active_tool_and_queue(
+    monkeypatch,
+):
+    from agybot.handlers.inbound_queue import (
+        clear_inbound_queue,
+        get_queued_prompts,
+        queue_inbound_prompt,
+    )
+    from agybot.handlers.message_queue import (
+        get_active_tool,
+        set_active_tool,
+    )
+    from agybot.session import session_manager
+
+    user_id = 1227075616
+    thread_id = 178763
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot.delete_message = AsyncMock()
+
+    # Setup active tool and a queued inbound prompt
+    set_active_tool(user_id, thread_id, "Running command…", "git status")
+    clear_inbound_queue(user_id, thread_id)
+    queue_inbound_prompt(user_id, thread_id, "next prompt in queue")
+    _status_msg_info[(user_id, thread_id)] = (55, "⠋ Running command…")
+
+    # 1. Processing thinking: deletes status msg, but MUST NOT clear active tool or dispatch prompt
+    thinking_task = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=["💭 *Thought:*\n>Thinking...||"],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, thinking_task)
+
+    # Status message was deleted so new status can appear below thought
+    mock_bot.delete_message.assert_called_once_with(chat_id=user_id, message_id=55)
+    # Active tool MUST STILL EXIST
+    assert get_active_tool(user_id, thread_id) is not None
+    # Queued prompt MUST STILL BE IN QUEUE
+    assert len(get_queued_prompts(user_id, thread_id)) == 1
+
+    # 2. Processing final text: deletes status msg, clears active tool, and dispatches queued prompt
+    text_task = MessageTask(
+        task_type="content",
+        content_type="text",
+        parts=["Done!"],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, text_task)
+
+    # Queued prompt was popped & dispatched, transitioning active tool to Working… for next prompt
+    assert len(get_queued_prompts(user_id, thread_id)) == 0
+    active = get_active_tool(user_id, thread_id)
+    assert active is not None
+    assert active.action == "Working…"

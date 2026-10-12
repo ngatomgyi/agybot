@@ -154,7 +154,10 @@ class TranscriptParser:
                     results.append(
                         ParsedEntry(
                             role="assistant",
-                            text=f"💭 {thinking_text}",
+                            text=(
+                                f"💭 *Thought:*\n"
+                                f"{cls.EXPANDABLE_QUOTE_START}{thinking_text}{cls.EXPANDABLE_QUOTE_END}"
+                            ),
                             content_type="thinking",
                             timestamp=timestamp,
                         )

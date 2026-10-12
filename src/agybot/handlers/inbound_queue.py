@@ -113,9 +113,7 @@ def queue_inbound_prompt(
     return len(queue)
 
 
-def get_queued_prompts(
-    user_id: int, thread_id: int | None
-) -> list[InboundPrompt]:
+def get_queued_prompts(user_id: int, thread_id: int | None) -> list[InboundPrompt]:
     """Get all queued prompts for a thread."""
     key = (user_id, thread_id or 0)
     return list(_inbound_queues.get(key, []))
@@ -142,9 +140,7 @@ def pop_next_inbound_prompt(
     return prompt
 
 
-def clear_inbound_queue(
-    user_id: int, thread_id: int | None
-) -> int:
+def clear_inbound_queue(user_id: int, thread_id: int | None) -> int:
     """Clear all queued inbound prompts for a thread. Returns number of cleared prompts."""
     key = (user_id, thread_id or 0)
     removed = len(_inbound_queues.pop(key, []))

@@ -170,9 +170,7 @@ def set_active_tool(
     )
 
 
-def get_active_tool(
-    user_id: int, thread_id: int | None
-) -> ActiveToolContext | None:
+def get_active_tool(user_id: int, thread_id: int | None) -> ActiveToolContext | None:
     """Get the current active tool or state for a thread."""
     key = (user_id, thread_id or 0)
     return _active_tool_contexts.get(key)
@@ -284,10 +282,7 @@ def _try_merge_status_tasks(
         except asyncio.QueueEmpty:
             break
 
-        if (
-            next_task.task_type == "status"
-            and next_task.thread_id == first.thread_id
-        ):
+        if next_task.task_type == "status" and next_task.thread_id == first.thread_id:
             latest = next_task
             discard_count += 1
         else:
@@ -329,7 +324,11 @@ def _try_merge_content_tasks(
 
     remaining: list[MessageTask] = []
     for i, nxt in enumerate(items):
-        if nxt.task_type != "content" or nxt.thread_id != first.thread_id:
+        if (
+            nxt.task_type != "content"
+            or nxt.thread_id != first.thread_id
+            or nxt.content_type != first.content_type
+        ):
             remaining = items[i:]
             break
         nxt_len = sum(len(p) for p in nxt.parts) if nxt.parts else 0
@@ -375,9 +374,11 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         )
         return
 
-    # Ephemeral status messages: delete/disappear when final content is delivered
+    # Ephemeral status messages: delete/disappear when content is delivered
     tid = task.thread_id or 0
-    matched_keys = [k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)]
+    matched_keys = [
+        k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
+    ]
     for k in matched_keys:
         status_info = _status_msg_info.pop(k, None)
         if status_info:
@@ -388,7 +389,9 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 logger.debug("Could not delete ephemeral status message: %s", e)
     if matched_keys:
         _save_status_msg_info()
-    clear_active_tool(user_id, task.thread_id)
+
+    if task.content_type != "thinking":
+        clear_active_tool(user_id, task.thread_id)
 
     common_kwargs: dict[str, Any] = {}
     if task.thread_id is not None:
@@ -409,10 +412,11 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if task.document_data:
         await send_document(bot, chat_id, task.document_data, **common_kwargs)
 
-    # 4. Check and dispatch next queued inbound prompt if any
-    from .inbound_queue import dispatch_next_queued_prompt
+    # 4. Check and dispatch next queued inbound prompt if any (only on final turn response)
+    if task.content_type != "thinking":
+        from .inbound_queue import dispatch_next_queued_prompt
 
-    await dispatch_next_queued_prompt(bot, user_id, task.thread_id)
+        await dispatch_next_queued_prompt(bot, user_id, task.thread_id)
 
 
 async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> None:
@@ -491,7 +495,10 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
             err_str = str(e).lower()
             if "message is not modified" in err_str:
                 return
-            if "message to edit not found" in err_str or "message can't be edited" in err_str:
+            if (
+                "message to edit not found" in err_str
+                or "message can't be edited" in err_str
+            ):
                 _status_msg_info.pop(key, None)
                 _save_status_msg_info()
             else:

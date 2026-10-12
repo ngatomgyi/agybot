@@ -107,4 +107,3 @@ def test_build_screenshot_keyboard_has_close_button():
     assert "❌ Close" in button_texts
     assert f"{CB_SCREENSHOT_REFRESH}@42" in callback_data
     assert f"{CB_SCREENSHOT_CLOSE}@42" in callback_data
-

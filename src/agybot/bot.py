@@ -201,7 +201,9 @@ async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     thread_id = _get_thread_id(update)
     if thread_id is None:
-        await safe_reply(update.message, "❌ /kill or /close can only be run in a forum topic.")
+        await safe_reply(
+            update.message, "❌ /kill or /close can only be run in a forum topic."
+        )
         return
 
     wid = session_manager.unbind_thread(thread_id)
@@ -270,7 +272,9 @@ async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     prompts = get_queued_prompts(user.id, thread_id)
     if not prompts:
-        await safe_reply(update.message, "ℹ️ No prompts currently queued for this topic.")
+        await safe_reply(
+            update.message, "ℹ️ No prompts currently queued for this topic."
+        )
         return
 
     lines = ["⏳ *Queued Prompts:*"]
@@ -371,7 +375,9 @@ async def artifacts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
 
     if oversized:
-        text = "⚠️ The following build artifacts exceed Telegram's 50MB bot upload limit:\n"
+        text = (
+            "⚠️ The following build artifacts exceed Telegram's 50MB bot upload limit:\n"
+        )
         for name, sz_mb, path in oversized:
             text += f"• `{name}` ({sz_mb:.1f} MB)\n  📍 `{path}`\n"
         await safe_reply(update.message, text)
@@ -509,7 +515,9 @@ async def handle_inbound_message(
             if msg.photo:
                 # Use highest resolution photo
                 photo_obj = msg.photo[-1]
-                filename = f"photo_{msg.message_id}_{int(asyncio.get_event_loop().time())}.jpg"
+                filename = (
+                    f"photo_{msg.message_id}_{int(asyncio.get_event_loop().time())}.jpg"
+                )
                 save_dest = attachments_dir / filename
                 tf = await context.bot.get_file(photo_obj.file_id)
                 await tf.download_to_drive(save_dest)
@@ -928,22 +936,18 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     thread_id = session_manager.get_thread_for_window(target_wid)
     user_id = session_manager.resolve_user_id_for_thread(thread_id)
 
-    # Ephemeral live progress for tool execution and thinking (in-place status message)
-    if msg.content_type in ("tool_use", "thinking"):
+    # Ephemeral live progress for tool execution (in-place status message)
+    if msg.content_type == "tool_use":
         if not msg.text:
             return
-        if msg.content_type == "thinking":
-            action = "Thinking…"
-            detail = ""
+        raw = msg.text.replace("**", "").strip()
+        if "\n" in raw:
+            action, detail = raw.split("\n", 1)
+            action = action.strip()
+            detail = detail.strip()
         else:
-            raw = msg.text.replace("**", "").strip()
-            if "\n" in raw:
-                action, detail = raw.split("\n", 1)
-                action = action.strip()
-                detail = detail.strip()
-            else:
-                action = raw
-                detail = ""
+            action = raw
+            detail = ""
 
         set_active_tool(user_id, thread_id, action, detail)
         status_text = f"⠋ {action}\n{detail}" if detail else f"⠋ {action}"
@@ -956,6 +960,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             thread_id=thread_id,
         )
         return
+
+    if msg.content_type == "thinking":
+        set_active_tool(user_id, thread_id, "Thinking…", "")
 
     parts = build_response_parts(
         text=msg.text,
