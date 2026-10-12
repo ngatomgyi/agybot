@@ -29,9 +29,15 @@ def test_bundled_resources():
 def test_caveman_rule_toggle(tmp_path: Path, monkeypatch):
     test_rules_dir = tmp_path / "rules"
     test_rule_file = test_rules_dir / "caveman.md"
+    test_gemini_file = tmp_path / "GEMINI.md"
 
     monkeypatch.setattr("agybot.caveman.CAVEMAN_RULES_DIR", test_rules_dir)
     monkeypatch.setattr("agybot.caveman.CAVEMAN_RULE_FILE", test_rule_file)
+    monkeypatch.setattr("agybot.caveman.GLOBAL_GEMINI_FILE", test_gemini_file)
+    monkeypatch.setattr("agybot.caveman.CONFIG_GEMINI_FILE", tmp_path / "cfg_GEMINI.md")
+    monkeypatch.setattr(
+        "agybot.caveman.WORKSPACE_PARENT_GEMINI_FILE", tmp_path / "root_GEMINI.md"
+    )
 
     assert not is_caveman_rule_active()
     assert is_caveman_skill_installed() or not is_caveman_skill_installed()
@@ -40,12 +46,15 @@ def test_caveman_rule_toggle(tmp_path: Path, monkeypatch):
     assert set_caveman_rule(True)
     assert is_caveman_rule_active()
     assert test_rule_file.is_file()
+    assert test_gemini_file.is_file()
     assert "Kill ceremony" in test_rule_file.read_text(encoding="utf-8")
+    assert "Kill ceremony" in test_gemini_file.read_text(encoding="utf-8")
 
     # Disable rule
     assert set_caveman_rule(False)
     assert not is_caveman_rule_active()
     assert not test_rule_file.exists()
+    assert not test_gemini_file.exists()
 
 
 def test_sync_caveman_configuration(tmp_path: Path, monkeypatch):
@@ -58,6 +67,11 @@ def test_sync_caveman_configuration(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("agybot.caveman.CAVEMAN_SKILL_FILE", test_skill_file)
     monkeypatch.setattr("agybot.caveman.CAVEMAN_RULES_DIR", test_rules_dir)
     monkeypatch.setattr("agybot.caveman.CAVEMAN_RULE_FILE", test_rule_file)
+    monkeypatch.setattr("agybot.caveman.GLOBAL_GEMINI_FILE", tmp_path / "GEMINI.md")
+    monkeypatch.setattr("agybot.caveman.CONFIG_GEMINI_FILE", tmp_path / "cfg_GEMINI.md")
+    monkeypatch.setattr(
+        "agybot.caveman.WORKSPACE_PARENT_GEMINI_FILE", tmp_path / "root_GEMINI.md"
+    )
 
     # Sync with "full" mode
     res = sync_caveman_configuration("full")
