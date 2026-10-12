@@ -110,7 +110,7 @@ The script will:
 | `/queue` | View prompts currently queued for this topic |
 | `/esc` | Sends an Escape interrupt to halt current agent execution |
 | `/clear` | Clears conversation context in Antigravity (`/clear`) |
-| `/usage` | Displays session ID, title, message count, and workspace path |
+| `/usage` | Displays active model, agent mode & effort, token breakdown (input, output, cached, total), step count, title, and workspace |
 | `/unbind` | Unbinds topic from tmux window (keeps window running in tmux) |
 | `/close` | Alias for `/kill`: terminates tmux window and unbinds topic |
 | `/kill` | Terminates tmux window and unbinds topic |

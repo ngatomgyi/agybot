@@ -524,3 +524,101 @@ class SessionManager:
 
 
 session_manager = SessionManager()
+
+
+def get_session_token_usage(transcript_path: Path | str) -> dict[str, int]:
+    """Calculate token usage from a session's transcript.jsonl.
+
+    Returns:
+        dict with keys: 'input_tokens', 'output_tokens', 'cache_read_tokens', 'total_tokens'.
+    """
+    path = Path(transcript_path)
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "total_tokens": 0,
+    }
+    if not path.is_file():
+        return totals
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if not line.strip() or ("token" not in line and "usage" not in line):
+                    continue
+                try:
+                    data = json.loads(line)
+                    in_tok = data.get("input_tokens") or 0
+                    out_tok = data.get("output_tokens") or 0
+                    cache_tok = data.get("cache_read_tokens") or 0
+                    totals["input_tokens"] += in_tok
+                    totals["output_tokens"] += out_tok
+                    totals["cache_read_tokens"] += cache_tok
+                except Exception:
+                    continue
+        totals["total_tokens"] = (
+            totals["input_tokens"]
+            + totals["output_tokens"]
+            + totals["cache_read_tokens"]
+        )
+    except Exception as e:
+        logger.debug("Error calculating token usage from %s: %s", path, e)
+
+    return totals
+
+
+def get_configured_model() -> tuple[str, str]:
+    """Read configured model and agent mode from Antigravity settings.json."""
+    settings_file = config.agy_data_dir / "settings.json"
+    if settings_file.exists():
+        try:
+            d = json.loads(settings_file.read_text(encoding="utf-8"))
+            return d.get("model", ""), d.get("agentMode", "")
+        except Exception:
+            pass
+    return "", ""
+
+
+async def get_live_session_model_info(window_id: str | None = None) -> dict[str, str]:
+    """Retrieve model, mode, and effort info for the current session.
+
+    Tries to parse live tmux pane status bar first (e.g. 'accept-edits · Gemini 3.8 Flash · high'),
+    then falls back to ~/.gemini/antigravity-cli/settings.json.
+    """
+    info = {
+        "model": "Gemini 3.8 Flash",
+        "agent_mode": "accept-edits",
+        "effort": "",
+    }
+
+    # 1. Try reading live status line from tmux pane if window_id provided
+    if window_id:
+        try:
+            pane_text = await tmux_manager.capture_pane(
+                window_id, start_line=-5, with_ansi=False
+            )
+            for line in reversed(pane_text.splitlines()):
+                line = line.strip()
+                # Status bar format: "mode · Model Name · effort" or similar
+                m = re.search(
+                    r"([a-zA-Z0-9_-]+)\s*·\s*([^·\n]+?)\s*·\s*([a-zA-Z0-9_-]+)", line
+                )
+                if m:
+                    info["agent_mode"] = m.group(1).strip()
+                    info["model"] = m.group(2).strip()
+                    info["effort"] = m.group(3).strip()
+                    return info
+        except Exception as e:
+            logger.debug(
+                "Could not parse model from pane for window %s: %s", window_id, e
+            )
+
+    # 2. Fallback to settings.json
+    cfg_model, cfg_mode = get_configured_model()
+    if cfg_model:
+        info["model"] = cfg_model
+    if cfg_mode:
+        info["agent_mode"] = cfg_mode
+
+    return info

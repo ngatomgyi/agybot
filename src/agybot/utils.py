@@ -109,3 +109,24 @@ def find_workspace_build_artifacts(
             pass
 
     return sorted(results, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def format_token_count(n: int) -> str:
+    """Format token count with human-readable suffixes and exact comma-separated count.
+
+    Examples:
+        format_token_count(0) -> "0"
+        format_token_count(540) -> "540"
+        format_token_count(454741) -> "454.7k (454,741)"
+        format_token_count(4337401) -> "4.34M (4,337,401)"
+        format_token_count(104349687) -> "104.35M (104,349,687)"
+    """
+    if n <= 0:
+        return "0"
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f}B ({n:,})"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M ({n:,})"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k ({n:,})"
+    return f"{n:,}"

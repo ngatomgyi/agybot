@@ -91,10 +91,14 @@ from .handlers.message_sender import (
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
 from .screenshot import text_to_image_async
-from .session import session_manager
+from .session import (
+    get_live_session_model_info,
+    get_session_token_usage,
+    session_manager,
+)
 from .session_monitor import NewMessage, session_monitor
 from .tmux_manager import tmux_manager
-from .utils import find_workspace_build_artifacts
+from .utils import find_workspace_build_artifacts, format_token_count
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +141,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• `/unbind` - Unbind topic from window\n"
         "• `/kill` or `/close` - Close/kill tmux window and unbind topic\n"
         "• `/clear` - Clear conversation context\n"
-        "• `/usage` - View session stats\n"
+        "• `/usage` - View model & token usage stats\n"
         "• `/queue` - View queued prompts in topic\n"
         "• `/clearqueue` - Clear queued prompts in topic\n\n"
         "_To get started, open a topic/thread (in direct chat with thread mode on, or in a supergroup forum) and send a message!_"
@@ -246,17 +250,41 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     session = await session_manager.resolve_session_for_window(wid)
-    if session:
-        text = (
-            f"📊 *Session Info*\n"
-            f"• ID: `{session.session_id}`\n"
-            f"• Title: *{session.summary}*\n"
-            f"• Steps/Messages: `{session.message_count}`\n"
-            f"• Workspace: `{session.cwd}`"
-        )
-        await safe_reply(update.message, text)
-    else:
+    if not session:
         await safe_reply(update.message, "ℹ️ No session active yet.")
+        return
+
+    # Extract live model info and token metrics
+    model_info = await get_live_session_model_info(wid)
+    tokens = get_session_token_usage(session.file_path)
+
+    model_name = model_info.get("model", "Default")
+    effort = model_info.get("effort", "")
+    if effort and f"({effort})" not in model_name.lower():
+        model_display = f"{model_name} ({effort.capitalize()})"
+    else:
+        model_display = model_name
+
+    mode_display = model_info.get("agent_mode", "accept-edits")
+
+    lines = [
+        "📊 *Session & Model Usage*",
+        f"• *Model:* `{model_display}`",
+        f"• *Mode:* `{mode_display}`",
+        f"• *Input Tokens:* {format_token_count(tokens['input_tokens'])}",
+        f"• *Output Tokens:* {format_token_count(tokens['output_tokens'])}",
+        f"• *Cached Tokens:* {format_token_count(tokens['cache_read_tokens'])}",
+        f"• *Total Tokens:* {format_token_count(tokens['total_tokens'])}",
+        f"• *Steps/Messages:* `{session.message_count}`",
+    ]
+    if session.summary and session.summary != session.session_id[:8]:
+        lines.append(f"• *Title:* {session.summary}")
+    if session.cwd:
+        lines.append(f"• *Workspace:* `{session.cwd}`")
+    lines.append(f"• *Session ID:* `{session.session_id}`")
+
+    text = "\n".join(lines)
+    await safe_reply(update.message, text)
 
 
 async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1000,7 +1028,7 @@ async def post_init(application: Application) -> None:
         BotCommand("artifacts", "Download all session artifacts"),
         BotCommand("esc", "Interrupt current turn (Escape)"),
         BotCommand("clear", "Clear conversation context"),
-        BotCommand("usage", "Session statistics"),
+        BotCommand("usage", "Model and token usage statistics"),
         BotCommand("unbind", "Unbind topic from window"),
         BotCommand("kill", "Kill window and unbind topic"),
         BotCommand("close", "Close window and unbind topic"),
