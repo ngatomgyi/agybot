@@ -21,6 +21,7 @@ from .config import config
 from .monitor_state import MonitorState
 from .session import session_manager
 from .transcript_parser import TranscriptParser
+from .utils import BUILD_EXTENSIONS, find_workspace_build_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,7 @@ class SessionMonitor:
             ):
                 continue
 
-            # Check for file:// links in text to attach referenced artifacts
+            # Check for file:// links and explicit binary paths in text
             if entry.text:
                 for m in re.finditer(
                     r"\[([^\]]+)\]\(file://([^\)#]+)(?:#[^\)]*)?\)", entry.text
@@ -276,39 +277,78 @@ class SessionMonitor:
                     linked = m.group(2).strip()
                     lp = Path(linked)
                     if lp.is_file() and (
-                        lp.suffix.lower() == ".md" or "/brain/" in linked
+                        lp.suffix.lower() == ".md"
+                        or lp.suffix.lower() in BUILD_EXTENSIONS
+                        or "/brain/" in linked
                     ):
                         self._session_artifacts.setdefault(
                             session_info.session_id, set()
                         ).add(str(lp.resolve()))
+
+                for m in re.finditer(
+                    r"(?:^|[\s\"'\(])(/[\w\.\-/]+?\.(?:apk|aab|ipa))(?=[\s\"'\)]|$)",
+                    entry.text,
+                ):
+                    cand = Path(m.group(1).strip())
+                    if cand.is_file():
+                        self._session_artifacts.setdefault(
+                            session_info.session_id, set()
+                        ).add(str(cand.resolve()))
 
             # Attach artifacts to assistant text responses
             docs_to_send: list[tuple[str, bytes]] = []
             if entry.document_data:
                 docs_to_send.extend(entry.document_data)
 
+            final_text = entry.text
             if entry.role == "assistant" and entry.content_type == "text":
+                # Auto-detect newly created build outputs in workspace
+                cwd = session_manager.get_cwd_for_session(session_info.session_id)
+                if cwd:
+                    recent_builds = find_workspace_build_artifacts(cwd)
+                    for bp in recent_builds:
+                        self._session_artifacts.setdefault(
+                            session_info.session_id, set()
+                        ).add(str(bp.resolve()))
+
                 candidates = list(
                     self._session_artifacts.pop(session_info.session_id, set())
                 )
                 seen_names: set[str] = {doc_name for doc_name, _ in docs_to_send}
                 sent_map = self._sent_artifacts.setdefault(session_info.session_id, {})
+                oversized_notices: list[str] = []
+
                 for cand_path in candidates:
                     try:
                         cp = Path(cand_path)
-                        if cp.is_file() and cp.stat().st_size <= 45 * 1024 * 1024:
-                            mtime = cp.stat().st_mtime
-                            last_mtime = sent_map.get(cand_path, 0.0)
-                            if mtime > last_mtime and cp.name not in seen_names:
+                        if not cp.is_file():
+                            continue
+                        mtime = cp.stat().st_mtime
+                        last_mtime = sent_map.get(cand_path, 0.0)
+                        if mtime <= last_mtime:
+                            continue
+
+                        size = cp.stat().st_size
+                        if size <= 48 * 1024 * 1024:
+                            if cp.name not in seen_names:
                                 docs_to_send.append((cp.name, cp.read_bytes()))
                                 seen_names.add(cp.name)
                                 sent_map[cand_path] = mtime
+                        else:
+                            sent_map[cand_path] = mtime
+                            sz_mb = size / (1024 * 1024)
+                            oversized_notices.append(
+                                f"⚠️ Build output `{cp.name}` ({sz_mb:.1f} MB) exceeds Telegram's 50MB bot upload limit.\n📍 Saved on host at: `{cp}`"
+                            )
                     except Exception as err:
                         logger.warning("Could not read artifact %s: %s", cand_path, err)
 
+                if oversized_notices and final_text:
+                    final_text = final_text + "\n\n" + "\n\n".join(oversized_notices)
+
             msg = NewMessage(
                 session_id=session_info.session_id,
-                text=entry.text,
+                text=final_text,
                 is_complete=True,
                 content_type=entry.content_type,
                 role=entry.role,

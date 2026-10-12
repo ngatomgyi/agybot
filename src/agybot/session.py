@@ -123,18 +123,51 @@ class SessionManager:
         """Store Telegram supergroup chat_id for a user + thread pair."""
         tid = thread_id or 0
         key = f"{user_id}:{tid}"
+        changed = False
         if self.group_chat_ids.get(key) != chat_id:
             self.group_chat_ids[key] = chat_id
+            changed = True
+        if tid != 0:
+            zero_key = f"0:{tid}"
+            if self.group_chat_ids.get(zero_key) != chat_id:
+                self.group_chat_ids[zero_key] = chat_id
+                changed = True
+        if changed:
             self._save_state()
 
     def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
         """Resolve destination chat_id (group chat_id or private user_id)."""
         if thread_id is not None:
+            # 1. Exact match for user_id:thread_id
             key = f"{user_id}:{thread_id}"
             group_id = self.group_chat_ids.get(key)
             if group_id is not None:
                 return group_id
-        return user_id
+            # 2. Check any entry associated with this thread_id
+            for k, gid in self.group_chat_ids.items():
+                if k.endswith(f":{thread_id}"):
+                    return gid
+        if user_id != 0:
+            return user_id
+        if config.allowed_users:
+            return config.allowed_users[0]
+        return 0
+
+    def resolve_user_id_for_thread(self, thread_id: int | None = None) -> int:
+        """Resolve user_id associated with a thread_id."""
+        if thread_id is not None:
+            for k in self.group_chat_ids:
+                parts = k.split(":")
+                if len(parts) == 2 and parts[1] == str(thread_id):
+                    try:
+                        uid = int(parts[0])
+                        if uid != 0:
+                            return uid
+                    except ValueError:
+                        pass
+        if config.allowed_users:
+            return config.allowed_users[0]
+        return 0
 
     # --- Window / Thread bindings ---
 
@@ -169,6 +202,30 @@ class SessionManager:
         for tid, wid in self.thread_bindings.items():
             if wid == window_id:
                 return tid
+        return None
+
+    def get_cwd_for_window(self, window_id: str) -> str | None:
+        """Get working directory for a window_id."""
+        ws = self.window_states.get(window_id)
+        if ws and ws.cwd:
+            return ws.cwd
+        return None
+
+    def get_cwd_for_session(self, session_id: str) -> str | None:
+        """Find working directory associated with a session ID."""
+        for ws in self.window_states.values():
+            if ws.session_id == session_id and ws.cwd:
+                return ws.cwd
+        if config.session_map_file.exists():
+            try:
+                content = config.session_map_file.read_text(encoding="utf-8")
+                if content.strip():
+                    smap = json.loads(content)
+                    for val in smap.values():
+                        if val.get("session_id") == session_id and val.get("cwd"):
+                            return val.get("cwd")
+            except Exception:
+                pass
         return None
 
     def get_window_state(self, window_id: str) -> WindowState:

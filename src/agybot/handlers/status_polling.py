@@ -81,8 +81,9 @@ async def status_poll_loop(bot: Bot) -> None:
 
             # Iterate over active thread bindings
             for thread_id, window_id in list(session_manager.thread_bindings.items()):
+                user_id = session_manager.resolve_user_id_for_thread(thread_id)
                 # Resolve destination chat_id
-                chat_id = session_manager.resolve_chat_id(0, thread_id)
+                chat_id = session_manager.resolve_chat_id(user_id, thread_id)
 
                 # Periodic topic existence check
                 if do_topic_check and chat_id != 0:
@@ -104,13 +105,13 @@ async def status_poll_loop(bot: Bot) -> None:
                             )
                             session_manager.unbind_thread(thread_id)
                             await tmux_manager.kill_window(window_id)
-                            await clear_topic_state(0, thread_id, bot)
+                            await clear_topic_state(user_id, thread_id, bot)
                             continue
                     except Exception:
                         pass
 
                 # Poll terminal for status / interactive UI
-                await update_status_message(bot, 0, window_id, thread_id)
+                await update_status_message(bot, user_id, window_id, thread_id)
 
             if do_topic_check:
                 last_topic_check = loop_time

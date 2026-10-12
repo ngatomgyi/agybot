@@ -21,10 +21,9 @@ from telegram.error import BadRequest, RetryAfter
 from ..session import session_manager
 from .message_sender import (
     NO_LINK_PREVIEW,
-    PARSE_MODE,
+    safe_send,
     send_document,
     send_photo,
-    send_with_fallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,6 +121,9 @@ async def _worker_loop(user_id: int, bot: Bot) -> None:
                         queue.task_done()
                     await _process_content_task(bot, user_id, task)
                 elif task.task_type == "status":
+                    task, discard_count = _try_merge_status_tasks(queue, task)
+                    for _ in range(discard_count):
+                        queue.task_done()
                     await _process_status_task(bot, user_id, task)
             except RetryAfter as e:
                 from datetime import timedelta
@@ -140,6 +142,43 @@ async def _worker_loop(user_id: int, bot: Bot) -> None:
                 queue.task_done()
     except asyncio.CancelledError:
         pass
+
+
+def _try_merge_status_tasks(
+    queue: asyncio.Queue[MessageTask], first: MessageTask
+) -> tuple[MessageTask, int]:
+    """Discard superseded status tasks for the same thread and keep only the latest."""
+    latest = first
+    discard_count = 0
+    remaining: list[MessageTask] = []
+
+    while not queue.empty():
+        try:
+            next_task = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+        if (
+            next_task.task_type == "status"
+            and next_task.thread_id == first.thread_id
+        ):
+            latest = next_task
+            discard_count += 1
+        else:
+            remaining.append(next_task)
+            break
+
+    if remaining:
+        rest: list[MessageTask] = []
+        while not queue.empty():
+            try:
+                rest.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        for item in remaining + rest:
+            queue.put_nowait(item)
+
+    return latest, discard_count
 
 
 def _try_merge_content_tasks(
@@ -200,65 +239,94 @@ def _try_merge_content_tasks(
 
 
 async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
-    """Send content message parts, photos, and documents."""
+    """Send content message parts, photos, and documents, clearing active status lines."""
     chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
-    send_kwargs: dict[str, Any] = {
-        "link_preview_options": NO_LINK_PREVIEW,
-    }
+    if not chat_id:
+        logger.error(
+            "Cannot send message task: chat_id could not be resolved (user_id=%d, thread_id=%s)",
+            user_id,
+            task.thread_id,
+        )
+        return
+
+    # Ephemeral status messages: delete/disappear when final content is delivered
+    tid = task.thread_id or 0
+    matched_keys = [k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)]
+    for k in matched_keys:
+        status_info = _status_msg_info.pop(k, None)
+        if status_info:
+            msg_id, _ = status_info
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                logger.debug("Could not delete ephemeral status message: %s", e)
+
+    common_kwargs: dict[str, Any] = {}
     if task.thread_id is not None:
-        send_kwargs["message_thread_id"] = task.thread_id
+        common_kwargs["message_thread_id"] = task.thread_id
 
     # 1. Send text parts
     if task.parts:
+        msg_kwargs = {**common_kwargs, "link_preview_options": NO_LINK_PREVIEW}
         for part in task.parts:
-
-            async def _send(t: str) -> None:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=t,
-                    parse_mode=PARSE_MODE,
-                    **send_kwargs,
-                )
-
-            await send_with_fallback(_send, part)
+            await safe_send(bot, chat_id, part, **msg_kwargs)
 
     # 2. Send images if any
     if task.image_data:
         for _, raw_bytes in task.image_data:
-            await send_photo(bot, chat_id, raw_bytes, **send_kwargs)
+            await send_photo(bot, chat_id, raw_bytes, **common_kwargs)
 
     # 3. Send documents/artifacts if any
     if task.document_data:
-        await send_document(bot, chat_id, task.document_data, **send_kwargs)
+        await send_document(bot, chat_id, task.document_data, **common_kwargs)
 
 
 async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> None:
-    """Send or edit status update line."""
+    """Send or edit status update line in-place."""
     if not task.status_text:
         return
 
     chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
+    if not chat_id:
+        return
     key = (user_id, task.thread_id or 0)
-    text = f"`{task.status_text}`"
+    raw_text = task.status_text.replace("\n", " ").strip()
+    clean_text = raw_text.replace("`", "'")
+    if len(clean_text) > 180:
+        clean_text = clean_text[:177] + "…"
+    display_text = f"⚙️ `{clean_text}`"
 
     status_info = _status_msg_info.get(key)
     if status_info:
         msg_id, last_text = status_info
-        if last_text == text:
+        if last_text == display_text:
             return
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=msg_id,
-                text=text,
+                text=display_text,
                 parse_mode="Markdown",
             )
-            _status_msg_info[key] = (msg_id, text)
+            _status_msg_info[key] = (msg_id, display_text)
             return
         except BadRequest as e:
-            if "message is not modified" in str(e).lower():
+            err_str = str(e).lower()
+            if "message is not modified" in err_str:
                 return
-            logger.debug("Could not edit status message: %s", e)
+            if "message to edit not found" in err_str or "message can't be edited" in err_str:
+                _status_msg_info.pop(key, None)
+            else:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                        text=f"⚙️ {clean_text}",
+                    )
+                    _status_msg_info[key] = (msg_id, clean_text)
+                    return
+                except Exception:
+                    pass
 
     # Send new status line
     send_kwargs: dict[str, Any] = {"parse_mode": "Markdown"}
@@ -268,9 +336,20 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
     try:
         msg = await bot.send_message(
             chat_id=chat_id,
-            text=text,
+            text=display_text,
             **send_kwargs,
         )
-        _status_msg_info[key] = (msg.message_id, text)
+        _status_msg_info[key] = (msg.message_id, display_text)
+    except BadRequest:
+        send_kwargs.pop("parse_mode", None)
+        try:
+            msg = await bot.send_message(
+                chat_id=chat_id,
+                text=f"⚙️ {clean_text}",
+                **send_kwargs,
+            )
+            _status_msg_info[key] = (msg.message_id, clean_text)
+        except Exception as ex:
+            logger.debug("Could not send fallback status message: %s", ex)
     except Exception as e:
         logger.debug("Could not send status message: %s", e)

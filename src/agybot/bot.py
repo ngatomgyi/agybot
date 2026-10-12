@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
 )
+from telegram.error import BadRequest
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -67,7 +69,10 @@ from .handlers.directory_browser import (
 )
 from .handlers.history import send_history
 from .handlers.interactive_ui import handle_interactive_callback
-from .handlers.message_queue import enqueue_content_message
+from .handlers.message_queue import (
+    enqueue_content_message,
+    enqueue_status_update,
+)
 from .handlers.message_sender import (
     safe_edit,
     safe_reply,
@@ -80,6 +85,7 @@ from .screenshot import text_to_image_async
 from .session import session_manager
 from .session_monitor import NewMessage, session_monitor
 from .tmux_manager import tmux_manager
+from .utils import find_workspace_build_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -262,18 +268,44 @@ async def artifacts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 except Exception as e:
                     logger.warning("Error reading artifact %s: %s", md_file, e)
 
-    if not artifacts:
+    # Search workspace for built binaries (.apk, .aab, .ipa)
+    cwd = session.cwd or session_manager.get_cwd_for_window(wid)
+    oversized: list[tuple[str, float, str]] = []
+    if cwd:
+        build_files = find_workspace_build_artifacts(cwd)
+        seen_names = {name for name, _ in artifacts}
+        for bf in build_files:
+            if bf.name in seen_names:
+                continue
+            try:
+                sz = bf.stat().st_size
+                if sz <= 48 * 1024 * 1024:
+                    artifacts.append((bf.name, bf.read_bytes()))
+                    seen_names.add(bf.name)
+                else:
+                    oversized.append((bf.name, sz / (1024 * 1024), str(bf)))
+            except Exception as e:
+                logger.warning("Error reading build artifact %s: %s", bf, e)
+
+    if not artifacts and not oversized:
         await safe_reply(update.message, "ℹ️ No artifacts found in this session yet.")
         return
 
     chat_id = session_manager.resolve_chat_id(user.id, thread_id)
-    await safe_reply(update.message, f"📦 Sending {len(artifacts)} artifact(s)...")
-    await send_document(
-        bot=context.bot,
-        chat_id=chat_id,
-        document_data=artifacts,
-        message_thread_id=thread_id,
-    )
+    if artifacts:
+        await safe_reply(update.message, f"📦 Sending {len(artifacts)} artifact(s)...")
+        await send_document(
+            bot=context.bot,
+            chat_id=chat_id,
+            document_data=artifacts,
+            message_thread_id=thread_id,
+        )
+
+    if oversized:
+        text = "⚠️ The following build artifacts exceed Telegram's 50MB bot upload limit:\n"
+        for name, sz_mb, path in oversized:
+            text += f"• `{name}` ({sz_mb:.1f} MB)\n  📍 `{path}`\n"
+        await safe_reply(update.message, text)
 
 
 def _build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
@@ -355,13 +387,13 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
-# --- Inbound Text Messages ---
+# --- Inbound Messages (Text & Attachments) ---
 
 
-async def handle_text_message(
+async def handle_inbound_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle regular text messages sent by user."""
+    """Handle regular text messages and file/image attachments sent by user."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id) or not update.message:
         return
@@ -373,30 +405,86 @@ async def handle_text_message(
     if thread_id is not None:
         session_manager.set_group_chat_id(user.id, thread_id, chat_id)
 
-    text = update.message.text
-    if not text:
-        return
+    msg = update.message
+    caption = (msg.caption or "").strip()
+    raw_text = (msg.text or "").strip()
 
-    wid = session_manager.get_window_for_thread(thread_id)
-
-    # 1. Topic already bound to a window -> forward keys
-    if wid:
-        await tmux_manager.send_keys(wid, text, enter=True)
-        return
-
-    # 2. Topic is unbound -> Show Window Picker or Directory Browser
+    # Topic unbound check first
     if thread_id is None:
         await safe_reply(
-            update.message,
+            msg,
             "ℹ️ agybot operates inside Telegram Forum topics.\n"
             "Please create a topic and send your message there!",
         )
         return
 
-    # Cache pending message text
+    wid = session_manager.get_window_for_thread(thread_id)
+
+    # Process attachment if photo or document
+    prompt_text = raw_text
+    if msg.photo or msg.document:
+        if not wid:
+            await safe_reply(
+                msg, "❌ Please bind this topic to a window before sending files."
+            )
+            return
+
+        cwd = session_manager.get_cwd_for_window(wid) or str(Path.home())
+        attachments_dir = Path(cwd) / "attachments"
+        attachments_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            if msg.photo:
+                # Use highest resolution photo
+                photo_obj = msg.photo[-1]
+                filename = f"photo_{msg.message_id}_{int(asyncio.get_event_loop().time())}.jpg"
+                save_dest = attachments_dir / filename
+                tf = await context.bot.get_file(photo_obj.file_id)
+                await tf.download_to_drive(save_dest)
+                prefix = f"[Attached image: {save_dest.resolve()}]"
+                clean_cap = caption.replace("\n", " ").strip()
+                prompt_text = f"{prefix} {clean_cap}".strip()
+            elif msg.document:
+                doc_obj = msg.document
+                orig_name = doc_obj.file_name or f"file_{doc_obj.file_id[:8]}"
+                safe_name = re.sub(r"[^\w\.-]", "_", orig_name)
+                save_dest = attachments_dir / safe_name
+                if save_dest.exists():
+                    save_dest = (
+                        attachments_dir
+                        / f"{save_dest.stem}_{msg.message_id}{save_dest.suffix}"
+                    )
+                tf = await context.bot.get_file(doc_obj.file_id)
+                await tf.download_to_drive(save_dest)
+                prefix = f"[Attached file: {save_dest.resolve()}]"
+                clean_cap = caption.replace("\n", " ").strip()
+                prompt_text = f"{prefix} {clean_cap}".strip()
+        except BadRequest as e:
+            if "file is too big" in str(e).lower():
+                await safe_reply(
+                    msg, "⚠️ Attachment exceeds Telegram's 20MB bot download limit."
+                )
+                return
+            await safe_reply(msg, f"⚠️ Failed to download attachment: {e}")
+            return
+        except Exception as e:
+            logger.error("Error downloading attachment: %s", e)
+            await safe_reply(msg, f"⚠️ Failed to process attachment: {e}")
+            return
+
+    if not prompt_text:
+        return
+
+    # 1. Topic already bound to a window -> forward prompt to tmux
+    if wid:
+        clean_prompt = prompt_text.replace("\n", " ")
+        await tmux_manager.send_keys(wid, clean_prompt, enter=True)
+        return
+
+    # 2. Topic is unbound -> Show Window Picker or Directory Browser
     user_data = context.user_data if context.user_data is not None else {}
     user_data["_pending_thread_id"] = thread_id
-    user_data["_pending_thread_text"] = text
+    user_data["_pending_thread_text"] = prompt_text
 
     # Check for unbound windows in agybot session
     all_windows = await tmux_manager.list_windows()
@@ -442,6 +530,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     thread_id = (
         update.effective_message.message_thread_id if update.effective_message else None
     )
+    if thread_id is not None and update.effective_chat:
+        session_manager.set_group_chat_id(user.id, thread_id, update.effective_chat.id)
     user_data = context.user_data if context.user_data is not None else {}
 
     # 1. No-op
@@ -735,6 +825,26 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         return
 
     thread_id = session_manager.get_thread_for_window(target_wid)
+    user_id = session_manager.resolve_user_id_for_thread(thread_id)
+
+    # Ephemeral live progress for tool execution and thinking (in-place status message)
+    if msg.content_type in ("tool_use", "thinking"):
+        if not msg.text:
+            return
+        if msg.content_type == "thinking":
+            status_text = "Thinking..."
+        else:
+            status_text = msg.text.replace("**", "").strip()
+
+        await enqueue_status_update(
+            bot=bot,
+            user_id=user_id,
+            window_id=target_wid,
+            status_text=status_text,
+            thread_id=thread_id,
+        )
+        return
+
     parts = build_response_parts(
         text=msg.text,
         is_complete=msg.is_complete,
@@ -748,7 +858,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     # Deliver to user queue
     await enqueue_content_message(
         bot=bot,
-        user_id=0,
+        user_id=user_id,
         window_id=target_wid,
         parts=parts,
         content_type=msg.content_type,
@@ -820,9 +930,12 @@ def create_bot() -> Application:
     # Callbacks
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    # Inbound messages
+    # Inbound messages (text, photos, documents)
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)
+        MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+            handle_inbound_message,
+        )
     )
 
     return app
