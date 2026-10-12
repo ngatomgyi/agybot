@@ -324,3 +324,88 @@ async def test_process_content_task_thinking_preserves_active_tool_and_queue(
     active = get_active_tool(user_id, thread_id)
     assert active is not None
     assert active.action == "Working…"
+
+
+@pytest.mark.asyncio
+async def test_thinking_actively_edits_single_message_in_place(monkeypatch):
+    from agybot.handlers.message_queue import (
+        _thought_msg_info,
+        clear_thought_msg_info,
+    )
+    from agybot.session import session_manager
+    from agybot.transcript_parser import TranscriptParser
+
+    user_id = 1227075616
+    thread_id = 999123
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+    clear_thought_msg_info(user_id, thread_id)
+
+    sent_msg = MagicMock()
+    sent_msg.message_id = 777
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock(return_value=sent_msg)
+    mock_bot.edit_message_text = AsyncMock(return_value=sent_msg)
+    mock_bot.delete_message = AsyncMock()
+
+    # Step 1: First thinking task
+    t1 = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=[
+            f"💭 *Thought:*\n{TranscriptParser.EXPANDABLE_QUOTE_START}Analyzing code...{TranscriptParser.EXPANDABLE_QUOTE_END}"
+        ],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, t1)
+
+    # First thought sends a new message
+    assert mock_bot.send_message.call_count == 1
+    assert mock_bot.edit_message_text.call_count == 0
+    assert (user_id, thread_id) in _thought_msg_info
+    assert _thought_msg_info[(user_id, thread_id)].message_id == 777
+
+    # Step 2: Second thinking task in same turn
+    t2 = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=[
+            f"💭 *Thought:*\n{TranscriptParser.EXPANDABLE_QUOTE_START}Found the solution!{TranscriptParser.EXPANDABLE_QUOTE_END}"
+        ],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, t2)
+
+    # Second thought MUST NOT send a new message — it must EDIT the existing message!
+    assert mock_bot.send_message.call_count == 1
+    assert mock_bot.edit_message_text.call_count == 1
+    edit_kwargs = mock_bot.edit_message_text.call_args.kwargs
+    assert edit_kwargs["message_id"] == 777
+    # Both thoughts are present in the edited message
+    assert "Analyzing code" in edit_kwargs["text"]
+    assert "Found the solution" in edit_kwargs["text"]
+
+    # Step 3: Final turn response delivers content and resets thought tracking
+    text_task = MessageTask(
+        task_type="content",
+        content_type="text",
+        parts=["All finished!"],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, text_task)
+
+    # Tracking cleared for next turn
+    assert (user_id, thread_id) not in _thought_msg_info
+
+    # Step 4: Next turn's thought creates a new message (total send_message = 1 (t1) + 1 (text) + 1 (t3) = 3)
+    t3 = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=[
+            f"💭 *Thought:*\n{TranscriptParser.EXPANDABLE_QUOTE_START}Next turn thought{TranscriptParser.EXPANDABLE_QUOTE_END}"
+        ],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, t3)
+
+    assert mock_bot.send_message.call_count == 3

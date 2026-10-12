@@ -21,8 +21,10 @@ from telegram import Bot
 from telegram.error import BadRequest, RetryAfter
 
 from ..session import session_manager
+from ..transcript_parser import TranscriptParser
 from .message_sender import (
     NO_LINK_PREVIEW,
+    safe_edit_message,
     safe_send,
     send_document,
     send_photo,
@@ -97,6 +99,23 @@ def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
     _save_status_msg_info()
 
 
+@dataclass
+class ThoughtMessageInfo:
+    """Tracking info for the single in-place thought message in a turn."""
+
+    message_id: int
+    thoughts: list[str]
+
+
+# (user_id, thread_id_or_0) -> ThoughtMessageInfo
+_thought_msg_info: dict[tuple[int, int], ThoughtMessageInfo] = {}
+
+
+def clear_thought_msg_info(user_id: int, thread_id: int | None = None) -> None:
+    """Clear thought message tracking for a topic."""
+    _thought_msg_info.pop((user_id, thread_id or 0), None)
+
+
 def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
     """Drain and discard pending status/content tasks for a specific thread."""
     queue = _user_queues.get(user_id)
@@ -123,6 +142,7 @@ async def cleanup_status_for_thread(
 ) -> None:
     """Delete any active or orphaned status message for this thread."""
     clear_active_tool(user_id, thread_id)
+    clear_thought_msg_info(user_id, thread_id)
     drain_tasks_for_thread(user_id, thread_id)
 
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
@@ -363,6 +383,116 @@ def _try_merge_content_tasks(
     )
 
 
+async def _process_thinking_task(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    task: MessageTask,
+    common_kwargs: dict[str, Any],
+) -> None:
+    """Send or actively edit the single in-place thought message for this turn."""
+    if not task.parts:
+        return
+
+    key = (user_id, task.thread_id or 0)
+    info = _thought_msg_info.get(key)
+
+    start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
+    end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
+
+    new_thoughts: list[str] = []
+    for part in task.parts:
+        text = part.strip()
+        if start_tag in text and end_tag in text:
+            inner = text[
+                text.index(start_tag) + len(start_tag) : text.index(end_tag)
+            ].strip()
+        else:
+            inner = text.replace("💭 *Thought:*", "").strip()
+        if inner and inner not in new_thoughts:
+            new_thoughts.append(inner)
+
+    if not new_thoughts:
+        return
+
+    if info is None:
+        # First thought of the turn: delete preceding status message (e.g. "Working…")
+        # so the thought message is positioned cleanly above subsequent tool status lines
+        tid = task.thread_id or 0
+        matched_keys = [
+            k
+            for k in list(_status_msg_info.keys())
+            if k[1] == tid or k == (user_id, tid)
+        ]
+        for k in matched_keys:
+            status_info = _status_msg_info.pop(k, None)
+            if status_info:
+                msg_id, _ = status_info
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                except Exception as e:
+                    logger.debug("Could not delete ephemeral status message: %s", e)
+        if matched_keys:
+            _save_status_msg_info()
+
+        current_thoughts = list(new_thoughts)
+    else:
+        current_thoughts = list(info.thoughts)
+        for nt in new_thoughts:
+            if nt not in current_thoughts:
+                current_thoughts.append(nt)
+
+    combined_inner = "\n\n".join(current_thoughts)
+    max_inner = 3500
+    if len(combined_inner) > max_inner:
+        combined_inner = (
+            "… (earlier thoughts truncated)\n\n" + combined_inner[-(max_inner - 35) :]
+        )
+
+    combined_text = (
+        f"💭 *Thought:*\n"
+        f"{TranscriptParser.EXPANDABLE_QUOTE_START}{combined_inner}{TranscriptParser.EXPANDABLE_QUOTE_END}"
+    )
+
+    msg_kwargs = {**common_kwargs, "link_preview_options": NO_LINK_PREVIEW}
+
+    if info is not None:
+        # Actively edit existing thought message in-place
+        try:
+            res = await safe_edit_message(
+                bot,
+                chat_id=chat_id,
+                message_id=info.message_id,
+                text=combined_text,
+                **msg_kwargs,
+            )
+            if res:
+                info.thoughts = current_thoughts
+            return
+        except BadRequest as e:
+            err_str = str(e).lower()
+            if "message is not modified" in err_str:
+                return
+            if (
+                "message to edit not found" in err_str
+                or "message can't be edited" in err_str
+            ):
+                _thought_msg_info.pop(key, None)
+            else:
+                logger.debug("Could not edit thought message: %s", e)
+
+    # Send new thought message and track it for this turn
+    try:
+        sent = await safe_send(bot, chat_id, combined_text, **msg_kwargs)
+        if sent:
+            _thought_msg_info[key] = ThoughtMessageInfo(
+                message_id=sent.message_id,
+                thoughts=current_thoughts,
+            )
+    except Exception as e:
+        logger.debug("Could not send thought message: %s", e)
+
+
 async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
     """Send content message parts, photos, and documents, clearing active status lines."""
     chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
@@ -374,7 +504,19 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         )
         return
 
-    # Ephemeral status messages: delete/disappear when content is delivered
+    common_kwargs: dict[str, Any] = {}
+    if task.thread_id is not None:
+        common_kwargs["message_thread_id"] = task.thread_id
+
+    # If thinking, delegate to single in-place thought message handler
+    if task.content_type == "thinking":
+        await _process_thinking_task(bot, chat_id, user_id, task, common_kwargs)
+        return
+
+    # Non-thinking content delivery marks completion of thinking for this turn
+    clear_thought_msg_info(user_id, task.thread_id)
+
+    # Ephemeral status messages: delete/disappear when final content is delivered
     tid = task.thread_id or 0
     matched_keys = [
         k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
@@ -390,12 +532,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if matched_keys:
         _save_status_msg_info()
 
-    if task.content_type != "thinking":
-        clear_active_tool(user_id, task.thread_id)
-
-    common_kwargs: dict[str, Any] = {}
-    if task.thread_id is not None:
-        common_kwargs["message_thread_id"] = task.thread_id
+    clear_active_tool(user_id, task.thread_id)
 
     # 1. Send text parts
     if task.parts:
@@ -412,11 +549,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if task.document_data:
         await send_document(bot, chat_id, task.document_data, **common_kwargs)
 
-    # 4. Check and dispatch next queued inbound prompt if any (only on final turn response)
-    if task.content_type != "thinking":
-        from .inbound_queue import dispatch_next_queued_prompt
+    # 4. Check and dispatch next queued inbound prompt if any
+    from .inbound_queue import dispatch_next_queued_prompt
 
-        await dispatch_next_queued_prompt(bot, user_id, task.thread_id)
+    await dispatch_next_queued_prompt(bot, user_id, task.thread_id)
 
 
 async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> None:

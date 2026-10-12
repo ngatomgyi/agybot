@@ -68,6 +68,28 @@ async def safe_send(bot: Bot, chat_id: int, text: str, **kwargs: Any) -> Message
     return await send_with_fallback(_send, text, **kwargs)
 
 
+async def safe_edit_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    **kwargs: Any,
+) -> Message | None:
+    """Edit message text by chat_id and message_id with formatting fallback."""
+
+    async def _edit(t: str, *args: Any, **kw: Any) -> Message:
+        return await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id, text=t, *args, **kw
+        )
+
+    try:
+        return await send_with_fallback(_edit, text, **kwargs)
+    except BadRequest as e:
+        if "message is not modified" in str(e).lower():
+            return None
+        raise
+
+
 async def send_photo(
     bot: Bot,
     chat_id: int,
