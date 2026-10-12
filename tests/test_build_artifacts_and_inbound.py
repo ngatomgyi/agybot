@@ -88,3 +88,23 @@ async def test_handle_inbound_photo_attachment(monkeypatch, tmp_path: Path):
     assert called_wid == wid
     assert "[Attached image:" in called_prompt
     assert "Fix this button UI" in called_prompt
+
+
+def test_build_screenshot_keyboard_has_close_button():
+    from agybot.bot import _build_screenshot_keyboard
+    from agybot.handlers.callback_data import (
+        CB_SCREENSHOT_CLOSE,
+        CB_SCREENSHOT_REFRESH,
+    )
+
+    kb = _build_screenshot_keyboard("@42")
+    # Last row should have y, n, Refresh, Close
+    last_row = kb.inline_keyboard[-1]
+    button_texts = [btn.text for btn in last_row]
+    callback_data = [btn.callback_data for btn in last_row]
+
+    assert "🔄 Refresh" in button_texts
+    assert "❌ Close" in button_texts
+    assert f"{CB_SCREENSHOT_REFRESH}@42" in callback_data
+    assert f"{CB_SCREENSHOT_CLOSE}@42" in callback_data
+

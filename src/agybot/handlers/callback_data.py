@@ -18,6 +18,7 @@ CB_WIN_CANCEL = "wb:cancel"
 
 # Screenshot
 CB_SCREENSHOT_REFRESH = "ss:ref:"
+CB_SCREENSHOT_CLOSE = "ss:cls:"
 
 # Interactive UI / Questions
 CB_ASK_UP = "aq:up:"

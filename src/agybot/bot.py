@@ -43,6 +43,7 @@ from .handlers.callback_data import (
     CB_HISTORY_NEXT,
     CB_HISTORY_PREV,
     CB_KEYS_PREFIX,
+    CB_SCREENSHOT_CLOSE,
     CB_SCREENSHOT_REFRESH,
     CB_SESSION_CANCEL,
     CB_SESSION_NEW,
@@ -336,6 +337,9 @@ def _build_screenshot_keyboard(window_id: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton("n", callback_data=f"{CB_KEYS_PREFIX}n:{window_id}"),
         InlineKeyboardButton(
             "🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{window_id}"
+        ),
+        InlineKeyboardButton(
+            "❌ Close", callback_data=f"{CB_SCREENSHOT_CLOSE}{window_id}"
         ),
     ]
     return InlineKeyboardMarkup([row1, row2, row3])
@@ -718,6 +722,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
         except Exception:
             pass
+        return
+
+    if data.startswith(CB_SCREENSHOT_CLOSE):
+        await query.answer("Screenshot closed")
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logger.debug("Could not delete screenshot message: %s", e)
         return
 
     # 6. History pagination
