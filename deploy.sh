@@ -111,12 +111,16 @@ EXISTING_TOKEN=""
 EXISTING_USERS=""
 EXISTING_CMD="agy --mode accept-edits --dangerously-skip-permissions"
 EXISTING_TMUX="agybot"
+EXISTING_TOOLS="true"
+EXISTING_THINKING="true"
 
 if [ -f "${ENV_FILE}" ]; then
     EXISTING_TOKEN=$(grep -E "^TELEGRAM_BOT_TOKEN=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)
     EXISTING_USERS=$(grep -E "^ALLOWED_USERS=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)
     EXISTING_CMD=$(grep -E "^AGY_COMMAND=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "${EXISTING_CMD}")
     EXISTING_TMUX=$(grep -E "^TMUX_SESSION_NAME=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "${EXISTING_TMUX}")
+    EXISTING_TOOLS=$(grep -E "^AGYBOT_SHOW_TOOL_CALLS=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "true")
+    EXISTING_THINKING=$(grep -E "^AGYBOT_SHOW_THINKING=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "true")
 elif [ -f "${HOME}/.ccbot/.env" ]; then
     # Smart import from ccbot if available
     EXISTING_TOKEN=$(grep -E "^TELEGRAM_BOT_TOKEN=" "${HOME}/.ccbot/.env" | cut -d'=' -f2- | tr -d '"' || true)
@@ -181,15 +185,27 @@ echo -e " ${SUCCESS} Tmux session: ${BOLD}${TMUX_SESSION_NAME}${RESET}\n"
 
 # 2.5 Display Preferences
 echo -e "${BOLD}Display Preferences in Telegram:${RESET}"
-read -r -p "Show tool execution & file edit status in chat? (Y/n): " SHOW_TOOLS_INPUT
-if [[ "${SHOW_TOOLS_INPUT,,}" =~ ^n ]]; then
+DEF_TOOLS="Y/n"
+if [ "${EXISTING_TOOLS:-true}" = "false" ]; then
+    DEF_TOOLS="y/N"
+fi
+read -r -p "Show tool execution & file edit status in chat? (${DEF_TOOLS}): " SHOW_TOOLS_INPUT
+if [ -z "${SHOW_TOOLS_INPUT}" ]; then
+    SHOW_TOOLS="${EXISTING_TOOLS:-true}"
+elif [[ "${SHOW_TOOLS_INPUT,,}" =~ ^n ]]; then
     SHOW_TOOLS="false"
 else
     SHOW_TOOLS="true"
 fi
 
-read -r -p "Show model thinking status in chat? (Y/n): " SHOW_THINKING_INPUT
-if [[ "${SHOW_THINKING_INPUT,,}" =~ ^n ]]; then
+DEF_THINKING="Y/n"
+if [ "${EXISTING_THINKING:-true}" = "false" ]; then
+    DEF_THINKING="y/N"
+fi
+read -r -p "Show model thinking in chat (expandable blockquotes)? (${DEF_THINKING}): " SHOW_THINKING_INPUT
+if [ -z "${SHOW_THINKING_INPUT}" ]; then
+    SHOW_THINKING="${EXISTING_THINKING:-true}"
+elif [[ "${SHOW_THINKING_INPUT,,}" =~ ^n ]]; then
     SHOW_THINKING="false"
 else
     SHOW_THINKING="true"
