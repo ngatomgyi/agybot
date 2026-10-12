@@ -125,6 +125,7 @@ class Config:
         self.auto_rename_topics = (
             os.getenv("AGYBOT_AUTO_RENAME_TOPICS", "true").lower() == "true"
         )
+        self.caveman_default_mode = os.getenv("CAVEMAN_DEFAULT_MODE", "full").lower()
 
 
 config = Config.__new__(Config)

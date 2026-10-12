@@ -111,6 +111,7 @@ The script will:
 | `/esc` | Sends an Escape interrupt to halt current agent execution |
 | `/clear` | Clears conversation context in Antigravity (`/clear`) |
 | `/usage` | Displays active model, agent mode & effort, token breakdown (input, output, cached, total), step count, title, and workspace |
+| `/caveman` | Toggle or check Caveman compressed mode (`/caveman on`, `/caveman off`, `/caveman full`) |
 | `/unbind` | Unbinds topic from tmux window (keeps window running in tmux) |
 | `/close` | Alias for `/kill`: terminates tmux window and unbinds topic |
 | `/kill` | Terminates tmux window and unbinds topic |
@@ -133,6 +134,9 @@ TMUX_SESSION_NAME="agybot"
 
 # Antigravity command executed in new windows
 AGY_COMMAND="agy --mode accept-edits --dangerously-skip-permissions"
+
+# Caveman token-saving mode ("full" or "off")
+CAVEMAN_DEFAULT_MODE="full"
 
 # Polling interval in seconds
 MONITOR_POLL_INTERVAL=1.5

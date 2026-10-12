@@ -90,6 +90,12 @@ from .handlers.message_sender import (
 )
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
+from .caveman import (
+    is_caveman_rule_active,
+    is_caveman_skill_installed,
+    set_caveman_rule,
+    sync_caveman_configuration,
+)
 from .screenshot import text_to_image_async
 from .session import (
     get_live_session_model_info,
@@ -142,6 +148,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• `/kill` or `/close` - Close/kill tmux window and unbind topic\n"
         "• `/clear` - Clear conversation context\n"
         "• `/usage` - View model & token usage stats\n"
+        "• `/caveman` - Toggle Caveman token-saving mode\n"
         "• `/queue` - View queued prompts in topic\n"
         "• `/clearqueue` - Clear queued prompts in topic\n\n"
         "_To get started, open a topic/thread (in direct chat with thread mode on, or in a supergroup forum) and send a message!_"
@@ -235,6 +242,65 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await tmux_manager.send_keys(wid, "/clear", enter=True)
     await safe_reply(update.message, "🧹 Sent /clear to Antigravity session.")
+
+
+async def caveman_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /caveman command to toggle or check Caveman compressed mode."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id) or not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    wid = session_manager.get_window_for_thread(thread_id)
+    args = context.args or []
+    subcmd = args[0].lower() if args else ""
+
+    if subcmd in ("on", "full"):
+        set_caveman_rule(True)
+        if wid:
+            await tmux_manager.send_keys(wid, "/caveman full", enter=True)
+        await safe_reply(
+            update.message,
+            "🪓 *Caveman Full Mode Enabled*\n"
+            "• Output and thoughts compressed to save tokens (~60-70% reduction)\n"
+            "• All code and technical accuracy preserved\n"
+            "• Active as default rule across sessions",
+        )
+    elif subcmd in ("off", "stop"):
+        set_caveman_rule(False)
+        if wid:
+            await tmux_manager.send_keys(wid, "stop caveman", enter=True)
+        await safe_reply(
+            update.message,
+            "🗣️ *Caveman Mode Disabled*\n"
+            "• Resumed normal detailed response style\n"
+            "• Default rule removed",
+        )
+    elif subcmd in ("lite", "ultra", "wenyan"):
+        if wid:
+            await tmux_manager.send_keys(wid, f"/caveman {subcmd}", enter=True)
+        await safe_reply(
+            update.message,
+            f"🪓 Sent `/caveman {subcmd}` to Antigravity session.",
+        )
+    else:
+        rule_active = is_caveman_rule_active()
+        skill_installed = is_caveman_skill_installed()
+        status_line = (
+            "🟢 Active (full mode)" if rule_active else "⚪ Disabled (normal mode)"
+        )
+        text = (
+            f"🪓 *Caveman Compressed Mode Status*\n\n"
+            f"• Status: {status_line}\n"
+            f"• Skill Installed: `{'Yes' if skill_installed else 'No'}`\n"
+            f"• Default Config: `{config.caveman_default_mode}`\n\n"
+            f"*Commands:*\n"
+            f"• `/caveman on` or `/caveman full` - Enable full compression\n"
+            f"• `/caveman off` - Disable caveman mode\n"
+            f"• `/caveman lite` - Moderate compression\n"
+            f"• `/caveman ultra` - Maximum compression"
+        )
+        await safe_reply(update.message, text)
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1029,6 +1095,7 @@ async def post_init(application: Application) -> None:
         BotCommand("esc", "Interrupt current turn (Escape)"),
         BotCommand("clear", "Clear conversation context"),
         BotCommand("usage", "Model and token usage statistics"),
+        BotCommand("caveman", "Toggle Caveman compressed mode"),
         BotCommand("unbind", "Unbind topic from window"),
         BotCommand("kill", "Kill window and unbind topic"),
         BotCommand("close", "Close window and unbind topic"),
@@ -1042,6 +1109,9 @@ async def post_init(application: Application) -> None:
 
     # Sync persisted state against running tmux windows
     await session_manager.resolve_stale_ids()
+
+    # Sync Caveman compressed mode skill and rule
+    sync_caveman_configuration(config.caveman_default_mode)
 
     # Hook message monitor callback
     session_monitor.set_message_callback(
@@ -1072,6 +1142,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler(["kill", "close"], kill_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("usage", usage_command))
+    app.add_handler(CommandHandler("caveman", caveman_command))
     app.add_handler(CommandHandler("queue", queue_command))
     app.add_handler(CommandHandler(["clearqueue", "cq"], clear_queue_command))
     app.add_handler(CommandHandler("artifacts", artifacts_command))

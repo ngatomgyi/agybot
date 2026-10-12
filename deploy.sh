@@ -43,7 +43,7 @@ echo -e "${DIM} 1 Topic = 1 Tmux Window = 1 Antigravity Session (accept-edits mo
 # ==============================================================================
 # Step 1: Check System Dependencies
 # ==============================================================================
-echo -e "${BOLD}${BLUE}[1/5] Checking System Dependencies...${RESET}"
+echo -e "${BOLD}${BLUE}[1/6] Checking System Dependencies...${RESET}"
 
 # 1.1 Check Python
 if command -v python3 >/dev/null 2>&1; then
@@ -99,7 +99,7 @@ echo ""
 # ==============================================================================
 # Step 2: Interactive Configuration
 # ==============================================================================
-echo -e "${BOLD}${BLUE}[2/5] Interactive Configuration${RESET}"
+echo -e "${BOLD}${BLUE}[2/6] Interactive Configuration${RESET}"
 echo -e "${DIM}Configure your Telegram Bot token and authorized user IDs.${RESET}\n"
 
 ENV_FILE="${SCRIPT_DIR}/.env"
@@ -211,6 +211,29 @@ else
     SHOW_THINKING="true"
 fi
 
+# 2.6 Caveman Token-Saving Mode
+EXISTING_CAVEMAN=$(grep -E "^CAVEMAN_DEFAULT_MODE=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "full")
+DEF_CAVEMAN="Y/n"
+if [ "${EXISTING_CAVEMAN}" = "off" ]; then
+    DEF_CAVEMAN="y/N"
+fi
+echo -e "\n${BOLD}Caveman Compressed Mode (Token-Saving):${RESET}"
+echo -e "${DIM}Enforces concise thinking and responses (cutting fluff/pleasantries) to save ~60-70% tokens.${RESET}"
+read -r -p "Enable Caveman full mode as default for all agy sessions? (${DEF_CAVEMAN}): " CAVEMAN_INPUT
+if [ -z "${CAVEMAN_INPUT}" ]; then
+    CAVEMAN_MODE="${EXISTING_CAVEMAN:-full}"
+elif [[ "${CAVEMAN_INPUT,,}" =~ ^n ]]; then
+    CAVEMAN_MODE="off"
+else
+    CAVEMAN_MODE="full"
+fi
+
+if [ "${CAVEMAN_MODE}" = "full" ]; then
+    echo -e " ${SUCCESS} Caveman full mode: ${BOLD}enabled by default${RESET}"
+else
+    echo -e " ${INFO} Caveman mode: ${BOLD}disabled${RESET} (normal detailed style)"
+fi
+
 # Write .env file
 cat << EOF > "${ENV_FILE}"
 # agybot configuration
@@ -223,6 +246,7 @@ AGYBOT_SHOW_TOOL_CALLS=${SHOW_TOOLS}
 AGYBOT_SHOW_THINKING=${SHOW_THINKING}
 AGYBOT_SHOW_USER_MESSAGES=false
 AGYBOT_AUTO_RENAME_TOPICS=true
+CAVEMAN_DEFAULT_MODE=${CAVEMAN_MODE}
 EOF
 
 # Sync to ~/.agybot/.env as fallback
@@ -231,16 +255,58 @@ chmod 600 "${ENV_FILE}" "${GLOBAL_ENV}"
 echo -e " ${SUCCESS} Configuration saved to ${BOLD}${ENV_FILE}${RESET}\n"
 
 # ==============================================================================
-# Step 3: Install Dependencies & Setup Virtual Environment
+# Step 3: Configure Antigravity Skills & Rules (Caveman)
 # ==============================================================================
-echo -e "${BOLD}${BLUE}[3/5] Setting Up Python Virtual Environment...${RESET}"
+echo -e "${BOLD}${BLUE}[3/6] Setting Up Caveman Skill & Rules...${RESET}"
+SKILL_DIR="${HOME}/.gemini/config/skills/caveman"
+RULES_DIR="${HOME}/.gemini/config/rules"
+mkdir -p "${SKILL_DIR}" "${RULES_DIR}"
+
+# 3.1 Install or update Caveman skill
+if [ ! -f "${SKILL_DIR}/SKILL.md" ]; then
+    echo -e " ${INFO} Caveman skill not found in ~/.gemini/config/skills/caveman. Installing..."
+    # Try fetching latest upstream from GitHub, fallback to bundled template
+    if curl -fsSL --connect-timeout 4 "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman/SKILL.md" -o "${SKILL_DIR}/SKILL.md.tmp" 2>/dev/null && [ -s "${SKILL_DIR}/SKILL.md.tmp" ]; then
+        mv "${SKILL_DIR}/SKILL.md.tmp" "${SKILL_DIR}/SKILL.md"
+        echo -e " ${SUCCESS} Caveman skill installed from upstream GitHub."
+    else
+        rm -f "${SKILL_DIR}/SKILL.md.tmp"
+        cp "${SCRIPT_DIR}/resources/skills/caveman/SKILL.md" "${SKILL_DIR}/SKILL.md"
+        echo -e " ${SUCCESS} Caveman skill installed from bundled template."
+    fi
+else
+    echo -e " ${INFO} Caveman skill already installed. Updating to latest..."
+    if curl -fsSL --connect-timeout 4 "https://raw.githubusercontent.com/JuliusBrussee/caveman/main/skills/caveman/SKILL.md" -o "${SKILL_DIR}/SKILL.md.tmp" 2>/dev/null && [ -s "${SKILL_DIR}/SKILL.md.tmp" ]; then
+        mv "${SKILL_DIR}/SKILL.md.tmp" "${SKILL_DIR}/SKILL.md"
+        echo -e " ${SUCCESS} Caveman skill updated from upstream GitHub."
+    else
+        rm -f "${SKILL_DIR}/SKILL.md.tmp"
+        cp "${SCRIPT_DIR}/resources/skills/caveman/SKILL.md" "${SKILL_DIR}/SKILL.md"
+        echo -e " ${SUCCESS} Caveman skill verified and synced."
+    fi
+fi
+
+# 3.2 Configure Caveman global rule for default sessions
+if [ "${CAVEMAN_MODE}" = "full" ]; then
+    cp "${SCRIPT_DIR}/resources/rules/caveman.md" "${RULES_DIR}/caveman.md"
+    echo -e " ${SUCCESS} Caveman full mode activated as default rule (${RULES_DIR}/caveman.md)."
+else
+    rm -f "${RULES_DIR}/caveman.md"
+    echo -e " ${INFO} Caveman default rule removed (${RULES_DIR}/caveman.md)."
+fi
+echo ""
+
+# ==============================================================================
+# Step 4: Install Dependencies & Setup Virtual Environment
+# ==============================================================================
+echo -e "${BOLD}${BLUE}[4/6] Setting Up Python Virtual Environment...${RESET}"
 uv sync
 echo -e " ${SUCCESS} Dependencies synced and verified via uv.\n"
 
 # ==============================================================================
-# Step 4: Systemd Service Installation
+# Step 5: Systemd Service Installation
 # ==============================================================================
-echo -e "${BOLD}${BLUE}[4/5] Service Setup & Auto-Start Configuration${RESET}"
+echo -e "${BOLD}${BLUE}[5/6] Service Setup & Auto-Start Configuration${RESET}"
 
 SERVICE_FILE="/etc/systemd/system/agybot.service"
 CAN_SUDO=false
@@ -298,7 +364,7 @@ WantedBy=multi-user.target
 fi
 
 # ==============================================================================
-# Step 5: Final Instructions & Verification
+# Step 6: Final Instructions & Verification
 # ==============================================================================
 echo -e "${BOLD}${GREEN}==============================================================================${RESET}"
 echo -e "${BOLD}${GREEN} 🎉 agybot Deployment Completed Successfully!${RESET}"
@@ -308,6 +374,7 @@ ${BOLD}Quick Reference:${RESET}
   • ${BOLD}Project directory:${RESET}   ${SCRIPT_DIR}
   • ${BOLD}Tmux session:${RESET}        ${TMUX_SESSION_NAME}
   • ${BOLD}Antigravity command:${RESET} ${AGY_COMMAND}
+  • ${BOLD}Caveman mode:${RESET}        ${CAVEMAN_MODE}
   • ${BOLD}Restart service:${RESET}     ./scripts/restart.sh (or 'sudo systemctl restart agybot')
   • ${BOLD}View live logs:${RESET}      journalctl -u agybot -f (or cat agybot.log)
 
