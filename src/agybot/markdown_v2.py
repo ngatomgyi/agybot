@@ -134,6 +134,11 @@ def convert_markdown(text: str) -> str:
     if not text:
         return ""
 
+    # Clean unsupported file:// URLs [label](file:///path) -> `label`
+    text = re.sub(r"\[`?([^`\]]+)`?\]\(file://[^\)]+\)", r"`\1`", text)
+    # Ensure blockquotes start at beginning of line
+    text = re.sub(r"(?m)^[ \t]+>", ">", text)
+
     text = convert_markdown_tables(text)
 
     segments: list[tuple[bool, str]] = []
@@ -147,12 +152,15 @@ def convert_markdown(text: str) -> str:
         segments.append((False, text[last_end:]))
 
     if not segments:
-        return _markdownify(text)
+        res = _markdownify(text)
+    else:
+        parts: list[str] = []
+        for is_quote, segment in segments:
+            if is_quote:
+                parts.append(_EXPQUOTE_RE.sub(_render_expandable_quote, segment))
+            else:
+                parts.append(_markdownify(segment))
+        res = "".join(parts)
 
-    parts: list[str] = []
-    for is_quote, segment in segments:
-        if is_quote:
-            parts.append(_EXPQUOTE_RE.sub(_render_expandable_quote, segment))
-        else:
-            parts.append(_markdownify(segment))
-    return "".join(parts)
+    # Ensure any '>' not starting a line is escaped as '\>' so Telegram MarkdownV2 entity parser succeeds
+    return re.sub(r"(?<!^)(?<!\n)>", r"\>", res)

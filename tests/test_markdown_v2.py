@@ -36,3 +36,20 @@ def test_convert_markdown_expandable_quote():
     assert ">Thinking deeply about life" in converted
     assert ">Line 2||" in converted
     assert "Thought" in converted
+
+
+def test_convert_markdown_file_links():
+    text = "Inspect [`/root/test.py`](file:///root/test.py) and [README.md](file:///README.md)"
+    converted = convert_markdown(text)
+    assert "file://" not in converted
+    assert "test\\.py" in converted or "test.py" in converted
+    assert "README\\.md" in converted or "README.md" in converted
+
+
+def test_convert_markdown_sanitizes_blockquotes():
+    text = "- Item description:\n  > *\"Quoted advice\"*\n  > Second line"
+    converted = convert_markdown(text)
+    # The blockquote should not have unescaped > preceded by non-newline characters
+    import re
+
+    assert not re.search(r"(?<!^)(?<!\n)>", converted)
