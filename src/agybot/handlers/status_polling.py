@@ -15,7 +15,7 @@ from telegram import Bot
 from telegram.error import BadRequest
 
 from ..session import session_manager
-from ..terminal_parser import extract_interactive_content, parse_status_line
+from ..terminal_parser import extract_interactive_content
 from ..tmux_manager import tmux_manager
 from .cleanup import clear_topic_state
 from .interactive_ui import (
@@ -23,7 +23,6 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .message_queue import enqueue_status_update
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +56,6 @@ async def update_status_message(
         # If was in interactive mode but prompt disappeared, clear it
         if get_interactive_window(user_id, thread_id) == window_id:
             await clear_interactive_msg(user_id, bot, thread_id)
-
-    # 2. Status line parsing
-    status_line = parse_status_line(pane_text)
-    if status_line:
-        await enqueue_status_update(
-            bot,
-            user_id,
-            window_id,
-            status_line,
-            thread_id,
-        )
 
 
 async def status_poll_loop(bot: Bot) -> None:

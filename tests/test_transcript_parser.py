@@ -62,6 +62,24 @@ def test_parse_model_tool_calls():
     assert "/root/agybot/README.md" in entries[1].text
 
 
+def test_format_tool_summary_various_tools():
+    summary_edit = TranscriptParser.format_tool_summary(
+        "replace_file_content", {"TargetFile": "/root/agybot/src/main.py"}
+    )
+    assert summary_edit == "**replace_file_content**(/root/agybot/src/main.py)"
+
+    summary_subagent = TranscriptParser.format_tool_summary(
+        "invoke_subagent",
+        {"Subagents": [{"Role": "Code Reviewer", "TypeName": "reviewer"}]},
+    )
+    assert summary_subagent == "**invoke_subagent**(Code Reviewer)"
+
+    summary_web = TranscriptParser.format_tool_summary(
+        "search_web", {"query": "python asyncio queue"}
+    )
+    assert summary_web == "**search_web**(python asyncio queue)"
+
+
 def test_extract_history_messages():
     lines = [
         '{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "<USER_REQUEST>Hi</USER_REQUEST>"}',

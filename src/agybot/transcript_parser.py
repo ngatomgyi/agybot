@@ -75,6 +75,16 @@ class TranscriptParser:
                 first = questions[0]
                 if isinstance(first, dict):
                     summary = first.get("question", "")
+        elif name == "invoke_subagent":
+            subagents = args.get("Subagents", [])
+            if isinstance(subagents, list) and subagents:
+                first = subagents[0]
+                if isinstance(first, dict):
+                    summary = first.get("Role", "") or first.get("TypeName", "")
+        elif name == "read_url_content":
+            summary = str(args.get("Url", "")).strip()
+        elif name == "search_web":
+            summary = str(args.get("query", "")).strip()
         else:
             for v in args.values():
                 if isinstance(v, str) and v:

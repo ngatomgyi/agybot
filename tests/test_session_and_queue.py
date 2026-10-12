@@ -124,3 +124,25 @@ def test_try_merge_status_tasks():
     # The non-status task remains in the queue
     assert not q.empty()
     assert q.get_nowait() == t_other
+
+
+@pytest.mark.asyncio
+async def test_update_status_message_does_not_enqueue_generic_status(monkeypatch):
+    from agybot.handlers.status_polling import update_status_message
+    from agybot.tmux_manager import tmux_manager
+
+    # Mock capture pane returning terminal spinner text
+    monkeypatch.setattr(
+        tmux_manager,
+        "capture_pane",
+        AsyncMock(return_value="Some output\n⣾  Running command...\n> "),
+    )
+
+    mock_bot = MagicMock()
+    # update_status_message should NOT raise, and should NOT enqueue any generic status
+    await update_status_message(mock_bot, 1227075616, "@1", 178763)
+    # The bot queue should not have any tasks enqueued from update_status_message
+    from agybot.handlers.message_queue import _user_queues
+
+    if 1227075616 in _user_queues:
+        assert _user_queues[1227075616].empty()
