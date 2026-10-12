@@ -354,11 +354,33 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
     if not chat_id:
         return
     key = (user_id, task.thread_id or 0)
-    raw_text = task.status_text.replace("\n", " ").strip()
-    clean_text = raw_text.replace("`", "'")
-    if len(clean_text) > 180:
-        clean_text = clean_text[:177] + "…"
-    display_text = f"⚙️ `{clean_text}`"
+    raw_status = task.status_text.strip()
+    if "\n" in raw_status:
+        title, detail = raw_status.split("\n", 1)
+        title = title.strip()
+        detail = detail.strip()
+    elif "…" in raw_status:
+        parts = raw_status.split("…", 1)
+        if len(parts) == 2 and parts[1].strip():
+            title = parts[0].strip() + "…"
+            detail = parts[1].strip()
+        else:
+            title = raw_status
+            detail = ""
+    else:
+        title = raw_status
+        detail = ""
+
+    clean_title = title.replace("`", "").replace("*", "").strip()
+    if detail:
+        clean_detail = detail.replace("`", "'").strip()
+        if len(clean_detail) > 180:
+            clean_detail = clean_detail[:177] + "…"
+        display_text = f"⚙️ *{clean_title}*\n`{clean_detail}`"
+        fallback_text = f"⚙️ {clean_title}\n{clean_detail}"
+    else:
+        display_text = f"⚙️ *{clean_title}*"
+        fallback_text = f"⚙️ {clean_title}"
 
     status_info = _status_msg_info.get(key)
     if status_info:
@@ -387,9 +409,9 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=msg_id,
-                        text=f"⚙️ {clean_text}",
+                        text=fallback_text,
                     )
-                    _status_msg_info[key] = (msg_id, clean_text)
+                    _status_msg_info[key] = (msg_id, fallback_text)
                     _save_status_msg_info()
                     return
                 except Exception:
@@ -413,10 +435,10 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
         try:
             msg = await bot.send_message(
                 chat_id=chat_id,
-                text=f"⚙️ {clean_text}",
+                text=fallback_text,
                 **send_kwargs,
             )
-            _status_msg_info[key] = (msg.message_id, clean_text)
+            _status_msg_info[key] = (msg.message_id, fallback_text)
             _save_status_msg_info()
         except Exception as ex:
             logger.debug("Could not send fallback status message: %s", ex)

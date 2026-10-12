@@ -113,7 +113,7 @@ class TranscriptParser:
         if summary:
             if len(summary) > cls._MAX_SUMMARY_LENGTH:
                 summary = summary[: cls._MAX_SUMMARY_LENGTH] + "…"
-            return f"{action} {summary}"
+            return f"{action}\n{summary}"
         return action
 
     @classmethod

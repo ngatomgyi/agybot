@@ -91,11 +91,11 @@ async def test_process_status_task_edits_existing_message(monkeypatch):
     mock_bot.send_message = AsyncMock()
 
     # Existing status message
-    _status_msg_info[(1227075616, 178763)] = (100, "⚙️ `run_command(git status)`")
+    _status_msg_info[(1227075616, 178763)] = (100, "⚙️ *Running command…*\n`git status`")
 
     task = MessageTask(
         task_type="status",
-        status_text="run_command(git diff)",
+        status_text="Running command…\ngit diff",
         thread_id=178763,
     )
 
@@ -103,6 +103,7 @@ async def test_process_status_task_edits_existing_message(monkeypatch):
 
     # Should edit message 100 in place
     mock_bot.edit_message_text.assert_called_once()
+    assert mock_bot.edit_message_text.call_args.kwargs["text"] == "⚙️ *Running command…*\n`git diff`"
     assert mock_bot.send_message.call_count == 0
     assert _status_msg_info[(1227075616, 178763)][0] == 100
 

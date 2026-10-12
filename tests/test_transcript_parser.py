@@ -66,23 +66,23 @@ def test_format_tool_summary_various_tools():
     summary_read = TranscriptParser.format_tool_summary(
         "view_file", {"AbsolutePath": "/root/agybot/README.md"}
     )
-    assert summary_read == "**Reading files…** /root/agybot/README.md"
+    assert summary_read == "**Reading files…**\n/root/agybot/README.md"
 
     summary_edit = TranscriptParser.format_tool_summary(
         "replace_file_content", {"TargetFile": "/root/agybot/src/main.py"}
     )
-    assert summary_edit == "**Editing files…** /root/agybot/src/main.py"
+    assert summary_edit == "**Editing files…**\n/root/agybot/src/main.py"
 
     summary_subagent = TranscriptParser.format_tool_summary(
         "invoke_subagent",
         {"Subagents": [{"Role": "Code Reviewer", "TypeName": "reviewer"}]},
     )
-    assert summary_subagent == "**Running subagent…** Code Reviewer"
+    assert summary_subagent == "**Running subagent…**\nCode Reviewer"
 
     summary_web = TranscriptParser.format_tool_summary(
         "search_web", {"query": "python asyncio queue"}
     )
-    assert summary_web == "**Searching web…** python asyncio queue"
+    assert summary_web == "**Searching web…**\npython asyncio queue"
 
 
 def test_extract_history_messages():
