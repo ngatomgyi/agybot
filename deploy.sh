@@ -181,18 +181,18 @@ echo -e " ${SUCCESS} Tmux session: ${BOLD}${TMUX_SESSION_NAME}${RESET}\n"
 
 # 2.5 Display Preferences
 echo -e "${BOLD}Display Preferences in Telegram:${RESET}"
-read -r -p "Show tool execution calls in chat? (y/N): " SHOW_TOOLS_INPUT
-if [[ "${SHOW_TOOLS_INPUT,,}" =~ ^y ]]; then
-    SHOW_TOOLS="true"
-else
+read -r -p "Show tool execution & file edit status in chat? (Y/n): " SHOW_TOOLS_INPUT
+if [[ "${SHOW_TOOLS_INPUT,,}" =~ ^n ]]; then
     SHOW_TOOLS="false"
+else
+    SHOW_TOOLS="true"
 fi
 
-read -r -p "Show model thinking / reasoning blocks in chat? (y/N): " SHOW_THINKING_INPUT
-if [[ "${SHOW_THINKING_INPUT,,}" =~ ^y ]]; then
-    SHOW_THINKING="true"
-else
+read -r -p "Show model thinking status in chat? (Y/n): " SHOW_THINKING_INPUT
+if [[ "${SHOW_THINKING_INPUT,,}" =~ ^n ]]; then
     SHOW_THINKING="false"
+else
+    SHOW_THINKING="true"
 fi
 
 # Write .env file

@@ -13,7 +13,9 @@ Each forum topic in Telegram is bound to exactly one tmux window running one aut
 - **Accept-Edits Mode**: Automatically launches new windows with `agy --mode accept-edits --dangerously-skip-permissions` for seamless autonomous coding.
 - **Hook-Free Conversation Auto-Resolution**: No external hooks required! Auto-detects conversation IDs in milliseconds by tracing process PIDs and CLI logs.
 - **Interactive Terminal Prompts**: Automatically renders inline keyboards for Antigravity `ask_question` choices, confirmation menus, and arrows.
-- **Artifacts Auto-Delivery**: Automatically identifies and sends generated markdown artifacts and documents directly to Telegram.
+- **Live Ephemeral Tool & Edit Status**: In-place single-message status tracker showing exact running commands and file edits, automatically disappearing upon final response to prevent chat clutter.
+- **Inbound Image & File Attachments**: Drop photos and documents directly into Telegram; agybot saves them to `<workspace>/attachments/` and seamlessly references them in the agent's prompt.
+- **Build Output & Artifacts Auto-Delivery**: Automatically detects and delivers `.apk`, `.aab`, and `.ipa` build binaries ($\le 48\text{ MB}$) alongside markdown artifacts, with path alerts for oversized binaries.
 - **High-Fidelity Terminal Screenshots**: Render dark-themed PNG screenshots of active tmux panes with full ANSI color support and font fallbacks (`JetBrains Mono` → `Noto Sans CJK` → `Symbola`).
 - **One-Click Interactive Deploy**: `deploy.sh` script with beautiful CLI styling, dependency checks, token validation, and systemd service generation.
 
@@ -113,9 +115,9 @@ AGY_COMMAND="agy --mode accept-edits --dangerously-skip-permissions"
 # Polling interval in seconds
 MONITOR_POLL_INTERVAL=1.5
 
-# Display preferences (false to keep chat clean)
-AGYBOT_SHOW_TOOL_CALLS=false
-AGYBOT_SHOW_THINKING=false
+# Display preferences (ephemeral in-place status)
+AGYBOT_SHOW_TOOL_CALLS=true
+AGYBOT_SHOW_THINKING=true
 AGYBOT_SHOW_USER_MESSAGES=false
 AGYBOT_AUTO_RENAME_TOPICS=true
 ```

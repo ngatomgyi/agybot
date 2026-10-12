@@ -116,10 +116,10 @@ class Config:
             os.getenv("AGYBOT_SHOW_USER_MESSAGES", "false").lower() == "true"
         )
         self.show_tool_calls = (
-            os.getenv("AGYBOT_SHOW_TOOL_CALLS", "false").lower() == "true"
+            os.getenv("AGYBOT_SHOW_TOOL_CALLS", "true").lower() == "true"
         )
         self.show_thinking = (
-            os.getenv("AGYBOT_SHOW_THINKING", "false").lower() == "true"
+            os.getenv("AGYBOT_SHOW_THINKING", "true").lower() == "true"
         )
         self.show_hidden_dirs = (
             os.getenv("AGYBOT_SHOW_HIDDEN_DIRS", "false").lower() == "true"
