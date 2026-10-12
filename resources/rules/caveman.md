@@ -38,6 +38,12 @@ Compress the style, not the language. Technical terms and errors stay verbatim.
 ### 9. Never perform caveman
 No "caveman mode on", no "me think", no "Caveman:" prefix, no fake broken grammar.
 
+### 10. Terse thinking
+Apply caveman compression to internal reasoning / thinking process:
+- Keep thoughts brief, direct, and token-efficient.
+- No rambling self-dialogue or long internal essays.
+- Short bullets: identify problem, select tool, execute. Minimize reasoning tokens.
+
 ## When to break rules (Use full sentences):
 1. Security warnings.
 2. Irreversible actions. Confirm in full sentences first.
