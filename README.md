@@ -4,9 +4,9 @@
 [![Python: >=3.12](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
 [![Package Manager: uv](https://img.shields.io/badge/package%20manager-uv-blueviolet)](https://astral.sh/uv)
 
-> **Telegram Bot bridging Telegram Forum Topics to Google Antigravity (`agy`) CLI sessions via Tmux windows.**
+> **Telegram Bot bridging Telegram Forum Topics & Direct Bot Threads to Google Antigravity (`agy`) CLI sessions via Tmux windows.**
 
-Each forum topic in a Telegram Supergroup is bound 1:1 to a tmux window running an autonomous Antigravity instance in `--mode accept-edits`.
+Each topic or thread (whether in 1-on-1 Direct Chat with Thread Mode on, or in a Forum Supergroup) is bound 1:1 to a tmux window running an autonomous Antigravity instance in `--mode accept-edits`.
 
 ---
 
@@ -31,7 +31,7 @@ Each forum topic in a Telegram Supergroup is bound 1:1 to a tmux window running 
 
 ```mermaid
 flowchart TD
-    subgraph Telegram["Telegram Client (Forum Supergroup)"]
+    subgraph Telegram["Telegram Client (Direct Thread Mode or Forum Supergroup)"]
         Topic1["Topic 1 (ccmux)"]
         Topic2["Topic 2 (agybot)"]
     end
@@ -76,7 +76,7 @@ flowchart TD
 3. **Python 3.12+** & **uv**: Fast Python package installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
 4. **Google Antigravity CLI**: `agy` installed and accessible in `PATH`.
 5. **Telegram Bot Token**: Created via [@BotFather](https://t.me/BotFather).
-6. **Telegram Supergroup**: A group with **Topics** enabled where your bot is added as an administrator (with permissions to post and delete messages).
+6. **Telegram Chat with Topics/Threads**: Use agybot either directly in **1-on-1 private chat with thread mode enabled**, or in a **Forum Supergroup** with topics enabled.
 
 ---
 

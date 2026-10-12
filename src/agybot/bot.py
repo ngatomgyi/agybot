@@ -140,7 +140,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• `/usage` - View session stats\n"
         "• `/queue` - View queued prompts in topic\n"
         "• `/clearqueue` - Clear queued prompts in topic\n\n"
-        "_To get started, create a new Forum Topic in this supergroup and send a message!_"
+        "_To get started, open a topic/thread (in direct chat with thread mode on, or in a supergroup forum) and send a message!_"
     )
     await safe_reply(update.message, text)
 

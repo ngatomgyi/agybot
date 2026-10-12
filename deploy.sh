@@ -312,8 +312,8 @@ ${BOLD}Quick Reference:${RESET}
   • ${BOLD}View live logs:${RESET}      journalctl -u agybot -f (or cat agybot.log)
 
 ${BOLD}How to use in Telegram:${RESET}
-  1. Open your Telegram supergroup forum.
-  2. Create a new topic (or navigate to an existing topic).
+  1. Open a direct chat with your bot (with thread mode on) or open your supergroup forum.
+  2. Create a new topic/thread (or navigate to an existing topic).
   3. Send any message in the topic:
      ${DIM}agybot will display the interactive Window & Directory Picker.${RESET}
   4. Select your project folder:
