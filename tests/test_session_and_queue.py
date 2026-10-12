@@ -656,3 +656,155 @@ async def test_clear_command_clears_window_session_id(monkeypatch):
     tmux_manager.send_keys.assert_called_once_with(wid, "/clear", enter=True)
 
 
+@pytest.mark.asyncio
+async def test_update_status_message_extracts_terminal_thought(monkeypatch):
+    from agybot.handlers.message_queue import (
+        set_active_tool,
+        clear_active_tool,
+        _user_queues,
+    )
+    from agybot.handlers.status_polling import (
+        update_status_message,
+        clear_last_enqueued_status,
+    )
+    from agybot.tmux_manager import tmux_manager
+
+    user_id = 1227075616
+    thread_id = 998811
+    if user_id in _user_queues:
+        while not _user_queues[user_id].empty():
+            _user_queues[user_id].get_nowait()
+    clear_active_tool(user_id, thread_id)
+    clear_last_enqueued_status(user_id, thread_id)
+    set_active_tool(user_id, thread_id, "Working…", "")
+
+    # Pane shows terminal thought line
+    pane_sample = "● Explored 1 file\n○ Thought for 45s (Optimizing SQLite query indices)\n"
+    monkeypatch.setattr(
+        tmux_manager,
+        "capture_pane",
+        AsyncMock(return_value=pane_sample),
+    )
+
+    mock_bot = MagicMock()
+    await update_status_message(mock_bot, user_id, "@1", thread_id)
+
+    assert user_id in _user_queues
+    q = _user_queues[user_id]
+    tasks = []
+    while not q.empty():
+        tasks.append(q.get_nowait())
+
+    # Should contain a thinking content task and a status update task
+    thinking_tasks = [t for t in tasks if t.content_type == "thinking"]
+    status_tasks = [t for t in tasks if t.task_type == "status"]
+    assert len(thinking_tasks) == 1
+    assert "Optimizing SQLite query indices" in thinking_tasks[0].parts[0]
+    assert len(status_tasks) == 1
+    assert "Thinking…" in status_tasks[0].status_text
+
+
+@pytest.mark.asyncio
+async def test_thought_merging_replaces_snippet_with_full_thought():
+    from agybot.handlers.message_queue import (
+        _process_content_task,
+        _thought_msg_info,
+        clear_thought_msg_info,
+        MessageTask,
+    )
+    from agybot.session import session_manager
+
+    user_id = 556677
+    thread_id = 8899
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+    clear_thought_msg_info(user_id, thread_id)
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock(return_value=MagicMock(message_id=1234))
+    mock_bot.edit_message_text = AsyncMock()
+
+    # Step 1: Terminal snippet arrives
+    t1 = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=["Thought for 1m 31s (Planning to incorporate category deduplication and un...)"],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, t1)
+
+    assert (user_id, thread_id) in _thought_msg_info
+    assert len(_thought_msg_info[(user_id, thread_id)].thoughts) == 1
+
+    # Step 2: Full transcript thought arrives (containing snippet substring)
+    _thought_msg_info[(user_id, thread_id)].last_edit_time = 0.0
+    full_text = "Planning to incorporate category deduplication and unique index enforcement into the migration script."
+    t2 = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=[full_text],
+        thread_id=thread_id,
+    )
+    await _process_content_task(mock_bot, user_id, t2)
+
+    # It should have UPGRADED the existing thought snippet, not duplicated it!
+    current = _thought_msg_info[(user_id, thread_id)].thoughts
+    assert len(current) == 1
+    assert current[0] == full_text
+
+
+@pytest.mark.asyncio
+async def test_resolve_full_thinking_from_transcript_full(tmp_path):
+    from agybot.session_monitor import _resolve_full_thinking
+    import json
+
+    full_log = tmp_path / "transcript_full.jsonl"
+    entries = [
+        {"step_index": 1, "thinking": "Initial plan"},
+        {"step_index": 2, "thinking": "Full detailed thinking block for step 2"},
+    ]
+    with open(full_log, "w", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e) + "\n")
+
+    resolved = await _resolve_full_thinking(full_log, step_index=2)
+    assert resolved == "Full detailed thinking block for step 2"
+
+    resolved_missing = await _resolve_full_thinking(full_log, step_index=99)
+    assert resolved_missing is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_turn_on_idle_deletes_status_preserves_thoughts():
+    from agybot.handlers.message_queue import (
+        cleanup_turn_on_idle,
+        _status_msg_info,
+        _thought_msg_info,
+        ThoughtMessageInfo,
+    )
+    from agybot.session import session_manager
+
+    user_id = 334455
+    thread_id = 6677
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+
+    _status_msg_info[(user_id, thread_id)] = (888, "⏳ Working…")
+    _thought_msg_info[(user_id, thread_id)] = ThoughtMessageInfo(
+        message_id=999,
+        thoughts=["Thought 1"],
+        last_edit_time=0.0,
+        chat_id=user_id,
+    )
+
+    mock_bot = MagicMock()
+    mock_bot.delete_message = AsyncMock()
+
+    await cleanup_turn_on_idle(mock_bot, user_id, thread_id)
+
+    # Status message was deleted from Telegram
+    mock_bot.delete_message.assert_called_once_with(chat_id=user_id, message_id=888)
+    assert (user_id, thread_id) not in _status_msg_info
+    # Thought message tracking is cleared for next turn, but thought message was NOT deleted
+    assert (user_id, thread_id) not in _thought_msg_info
+
+
+

@@ -14,10 +14,12 @@ import logging
 from telegram import Bot
 from telegram.error import BadRequest
 
+from ..config import config
 from ..session import session_manager
 from ..terminal_parser import (
     extract_interactive_content,
     extract_spinner_and_status,
+    extract_thought_from_terminal,
 )
 from ..tmux_manager import tmux_manager
 from .cleanup import clear_topic_state
@@ -26,7 +28,12 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
-from .message_queue import enqueue_status_update, get_active_tool
+from .message_queue import (
+    cleanup_turn_on_idle,
+    enqueue_content_message,
+    enqueue_status_update,
+    get_active_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +41,13 @@ STATUS_POLL_INTERVAL = 2.0
 TOPIC_CHECK_INTERVAL = 60.0
 
 _last_enqueued_status: dict[tuple[int, int], str] = {}
+_last_enqueued_thought: dict[tuple[int, int], str] = {}
 
 
 def clear_last_enqueued_status(user_id: int, thread_id: int | None = None) -> None:
-    """Clear cached enqueued status for a thread."""
+    """Clear cached enqueued status and thought for a thread."""
     _last_enqueued_status.pop((user_id, thread_id or 0), None)
+    _last_enqueued_thought.pop((user_id, thread_id or 0), None)
 
 
 def get_action_icon(action: str) -> str:
@@ -52,7 +61,7 @@ def get_action_icon(action: str) -> str:
         return "🔍"
     if any(k in act for k in ("edit", "write", "patch", "modify", "create")):
         return "✏️"
-    if any(k in act for k in ("think", "reason", "plan")):
+    if any(k in act for k in ("think", "thought", "reason", "plan")):
         return "💭"
     if any(k in act for k in ("subagent", "agent")):
         return "🤖"
@@ -70,7 +79,7 @@ async def update_status_message(
     window_id: str,
     thread_id: int | None = None,
 ) -> None:
-    """Check terminal pane for interactive UI and status updates."""
+    """Check terminal pane for interactive UI, thoughts, and status updates."""
     pane_text = await tmux_manager.capture_pane(window_id, start_line=-30)
     if not pane_text:
         return
@@ -91,24 +100,52 @@ async def update_status_message(
         if get_interactive_window(user_id, thread_id) == window_id:
             await clear_interactive_msg(user_id, bot, thread_id)
 
-    # 2. Live terminal status polling without cycling animation spam
+    # 2. Terminal activity & status polling
     ctx = get_active_tool(user_id, thread_id)
     if not ctx:
         # Agent is idle (turn finished or interrupted with /esc) - do not poll stale terminal text
         return
 
     spinner_info = extract_spinner_and_status(pane_text)
+    if not spinner_info:
+        # Active spinner/action disappeared from terminal: agent completed turn
+        await cleanup_turn_on_idle(bot, user_id, thread_id)
+        return
+
+    # 3. Live terminal thought extraction: keep thoughts in in-place thought message
+    if config.show_thinking:
+        term_thought = extract_thought_from_terminal(pane_text)
+        if term_thought:
+            key = (user_id, thread_id or 0)
+            if _last_enqueued_thought.get(key) != term_thought:
+                _last_enqueued_thought[key] = term_thought
+                await enqueue_content_message(
+                    bot,
+                    user_id,
+                    window_id,
+                    [term_thought],
+                    content_type="thinking",
+                    thread_id=thread_id,
+                )
+
+    # 4. Status message update (ephemeral spinner separate from thought message)
     if spinner_info:
         _, term_text = spinner_info
-        raw_act = ctx.action if (ctx.action and ctx.action != "Working…") else term_text
+        raw_act = (
+            ctx.action
+            if (ctx and ctx.action and ctx.action not in ("Working…", "Thinking…"))
+            else term_text
+        )
         icon = _get_action_icon(raw_act)
 
-        if ctx.detail or ctx.action not in ("Working…", ""):
+        if ctx and (ctx.detail or ctx.action not in ("Working…", "Thinking…", "")):
             # Active tool known from transcript (e.g. running command or reading file)
             if ctx.detail:
                 status_text = f"{icon} {ctx.action}\n{ctx.detail}"
             else:
                 status_text = f"{icon} {ctx.action}"
+        elif "thought for " in term_text.lower() or "thinking" in term_text.lower():
+            status_text = "💭 Thinking…"
         else:
             clean_term = term_text
             if clean_term.endswith("..."):

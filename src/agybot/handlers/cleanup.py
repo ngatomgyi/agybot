@@ -27,8 +27,11 @@ async def clear_topic_state(
     user_data: dict[str, Any] | None = None,
 ) -> None:
     """Clear all memory and UI state associated with a topic."""
+    from .status_polling import clear_last_enqueued_status
+
     clear_status_msg_info(user_id, thread_id)
     clear_thought_msg_info(user_id, thread_id)
+    clear_last_enqueued_status(user_id, thread_id)
     clear_active_tool(user_id, thread_id)
     drain_tasks_for_thread(user_id, thread_id)
     clear_inbound_queue(user_id, thread_id)

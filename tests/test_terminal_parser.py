@@ -25,3 +25,31 @@ def test_parse_status_line():
     status = parse_status_line(text)
     assert status is not None
     assert "Running command" in status
+
+
+def test_extract_thought_from_terminal():
+    from agybot.terminal_parser import extract_thought_from_terminal
+
+    # Thought with duration and summary
+    sample1 = "● Explored 1 file (migrate.js)\n○ Thought for 3m 55s (The goal is to integrate a global refresh event liste...)"
+    th1 = extract_thought_from_terminal(sample1)
+    assert th1 is not None
+    assert "Thought for 3m 55s" in th1
+    assert "global refresh event" in th1
+
+    # Short thought with bullet
+    sample2 = "▸ Thought for 7s\n● Ran 2 commands"
+    th2 = extract_thought_from_terminal(sample2)
+    assert th2 is not None
+    assert th2 == "Thought for 7s"
+
+    # In-progress thinking with summary
+    sample3 = "○ Thinking... (analyzing project structure)"
+    th3 = extract_thought_from_terminal(sample3)
+    assert th3 is not None
+    assert "analyzing project structure" in th3
+
+    # Generic spinner without thought summary
+    sample4 = "● Explored 1 file (test.py)\n● Ran 3 commands\n> "
+    th4 = extract_thought_from_terminal(sample4)
+    assert th4 is None

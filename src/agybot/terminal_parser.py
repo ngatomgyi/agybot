@@ -144,7 +144,57 @@ _SPINNERS = {
     "⢿",
     "○",
     "●",
+    "▸",
 }
+
+
+def is_terminal_idle_at_prompt(lines: list[str]) -> bool:
+    """Check if the terminal is currently at the idle prompt waiting for user input."""
+    bottom_lines = [line.strip() for line in lines if line.strip()][-6:]
+    if not bottom_lines:
+        return False
+    # If esc to cancel or ctrl+c is present, agent is actively executing
+    has_cancel = any(
+        "esc to cancel" in line.lower() or "ctrl+c" in line.lower()
+        for line in bottom_lines
+    )
+    if has_cancel:
+        return False
+
+    # Check if last non-empty line ends at prompt `>` or prompt + shortcuts
+    last = bottom_lines[-1]
+    if last == ">" or last.startswith("> "):
+        return True
+    if len(bottom_lines) >= 2 and any(
+        line == ">" or line.startswith("> ") for line in bottom_lines[-3:]
+    ):
+        if any("? for shortcuts" in line or "shortcuts" in line for line in bottom_lines[-2:]):
+            return True
+
+    return False
+
+
+def extract_thought_from_terminal(text: str) -> str | None:
+    """Extract thought summary from terminal pane if present."""
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return None
+
+    prefixes = list(_SPINNERS) + ["•", "*", "-", "🧠", "💭"]
+    for line in reversed(lines[-15:]):
+        clean = line
+        for prefix in prefixes:
+            if clean.startswith(prefix):
+                clean = clean[len(prefix) :].strip()
+                break
+
+        clean_lower = clean.lower()
+        if clean_lower.startswith("thought for "):
+            return clean
+        if clean_lower.startswith("thinking...") or clean_lower.startswith("thinking…"):
+            if len(clean) > len("thinking..."):
+                return clean
+    return None
 
 
 def parse_status_line(text: str) -> str | None:

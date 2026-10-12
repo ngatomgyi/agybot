@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -198,14 +199,15 @@ def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
         queue.put_nowait(task)
 
 
-def _drain_thinking_tasks_for_thread(
+def _drain_and_collect_thinking_tasks_for_thread(
     user_id: int, thread_id: int | None = None
-) -> None:
-    """Drain and discard pending thinking tasks for a specific thread."""
+) -> list[MessageTask]:
+    """Drain and return pending thinking tasks for a specific thread."""
     queue = _user_queues.get(user_id)
     if not queue or queue.empty():
-        return
+        return []
     tid = thread_id or 0
+    collected: list[MessageTask] = []
     remaining: list[MessageTask] = []
     while not queue.empty():
         try:
@@ -218,18 +220,65 @@ def _drain_thinking_tasks_for_thread(
             and task.task_type == "content"
             and task.content_type == "thinking"
         ):
+            collected.append(task)
             queue.task_done()
         else:
             remaining.append(task)
     for task in remaining:
         queue.put_nowait(task)
+    return collected
+
+
+def _drain_thinking_tasks_for_thread(
+    user_id: int, thread_id: int | None = None
+) -> None:
+    """Drain pending thinking tasks for a specific thread."""
+    _drain_and_collect_thinking_tasks_for_thread(user_id, thread_id)
+
+
+async def cleanup_turn_on_idle(
+    bot: Bot, user_id: int, thread_id: int | None = None
+) -> None:
+    """When agent becomes idle in terminal, delete ephemeral status and preserve thoughts."""
+    from .status_polling import clear_last_enqueued_status
+
+    clear_active_tool(user_id, thread_id)
+    clear_last_enqueued_status(user_id, thread_id)
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    tid = thread_id or 0
+
+    if not chat_id:
+        clear_thought_msg_info(user_id, thread_id)
+        clear_status_msg_info(user_id, thread_id)
+        return
+
+    # 1. Delete ephemeral status message
+    matched_keys = [
+        k for k in list(_status_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
+    ]
+    for k in matched_keys:
+        info = _status_msg_info.pop(k, None)
+        if info:
+            msg_id, _ = info
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception as e:
+                logger.debug("Could not delete status message on idle: %s", e)
+    if matched_keys:
+        _save_status_msg_info()
+
+    # 2. Finalize thought message for this turn (retaining message in chat)
+    clear_thought_msg_info(user_id, thread_id)
 
 
 async def cleanup_status_for_thread(
     bot: Bot, user_id: int, thread_id: int | None = None
 ) -> None:
-    """Delete any active or orphaned status and thought messages for this thread."""
+    """Delete any active or orphaned status messages and reset tracking."""
+    from .status_polling import clear_last_enqueued_status
+
     clear_active_tool(user_id, thread_id)
+    clear_last_enqueued_status(user_id, thread_id)
     drain_tasks_for_thread(user_id, thread_id)
 
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
@@ -535,7 +584,23 @@ async def _process_thinking_task(
     else:
         current_thoughts = list(info.thoughts)
         for nt in new_thoughts:
-            if nt not in current_thoughts:
+            replaced = False
+            for idx, existing in enumerate(current_thoughts):
+                if existing == nt:
+                    replaced = True
+                    break
+                m_existing = re.search(r"\((.+?)\.{0,3}\)$", existing)
+                snip_existing = m_existing.group(1).strip() if m_existing else ""
+                if snip_existing and len(snip_existing) > 8 and snip_existing in nt:
+                    current_thoughts[idx] = nt
+                    replaced = True
+                    break
+                m_nt = re.search(r"\((.+?)\.{0,3}\)$", nt)
+                snip_nt = m_nt.group(1).strip() if m_nt else ""
+                if snip_nt and len(snip_nt) > 8 and snip_nt in existing:
+                    replaced = True
+                    break
+            if not replaced:
                 current_thoughts.append(nt)
 
     combined_inner = "\n\n".join(current_thoughts)
@@ -624,8 +689,12 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         await _process_thinking_task(bot, chat_id, user_id, task, common_kwargs)
         return
 
-    # Drain any remaining thinking tasks for this thread from queue so stale thoughts cannot pop up after final text
-    _drain_thinking_tasks_for_thread(user_id, task.thread_id)
+    # Process any remaining pending thinking tasks for this thread before finalizing the turn
+    pending_thinking = _drain_and_collect_thinking_tasks_for_thread(
+        user_id, task.thread_id
+    )
+    for pt in pending_thinking:
+        await _process_thinking_task(bot, chat_id, user_id, pt, common_kwargs)
 
     # Finalize thought message for this turn and keep it permanently sitting above output:
     tid = task.thread_id or 0

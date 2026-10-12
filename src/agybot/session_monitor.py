@@ -20,7 +20,7 @@ import aiofiles
 from .config import config
 from .monitor_state import MonitorState
 from .session import session_manager
-from .transcript_parser import TranscriptParser
+from .transcript_parser import ParsedEntry, TranscriptParser
 from .utils import BUILD_EXTENSIONS, find_workspace_build_artifacts
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,31 @@ class SessionInfo:
 
     session_id: str
     file_path: Path
+
+
+async def _resolve_full_thinking(full_path: Path, step_index: int) -> str | None:
+    """Read full thinking content from transcript_full.jsonl for a given step_index."""
+    try:
+        async with aiofiles.open(
+            full_path, "r", encoding="utf-8", errors="replace"
+        ) as f:
+            async for line in f:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    entry = json.loads(line_str)
+                    if entry.get("step_index") == step_index:
+                        th = entry.get("thinking")
+                        if th and not str(th).startswith("<truncated"):
+                            return str(th).strip()
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        logger.debug(
+            "Could not resolve full thinking for step %d: %s", step_index, e
+        )
+    return None
 
 
 class SessionMonitor:
@@ -268,8 +293,27 @@ class SessionMonitor:
                 e,
             )
 
+        # Check for truncated thinking and resolve from transcript_full.jsonl
+        full_path = file_path.with_name("transcript_full.jsonl")
+        has_full_file = full_path.is_file()
+        if has_full_file:
+            for data in new_entries:
+                trunc_fields = data.get("truncated_fields") or []
+                th = data.get("thinking")
+                needs_full = "thinking" in trunc_fields or (
+                    th and str(th).startswith("<truncated")
+                )
+                if needs_full:
+                    si = data.get("step_index")
+                    if si is not None:
+                        full_th = await _resolve_full_thinking(full_path, si)
+                        if full_th:
+                            data["thinking"] = full_th
+
         # Parse entries
-        parsed_entries = TranscriptParser.parse_lines(new_lines)
+        parsed_entries: list[ParsedEntry] = []
+        for data in new_entries:
+            parsed_entries.extend(TranscriptParser.parse_entry(data))
 
         for entry in parsed_entries:
             if not entry.text and not entry.image_data and not entry.document_data:
