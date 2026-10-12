@@ -157,7 +157,7 @@ async def test_update_status_message_preserves_active_tool_with_spinner(monkeypa
     task = _user_queues[1227075616].get_nowait()
     assert task.task_type == "status"
     assert "git diff" in task.status_text
-    assert "⣾" in task.status_text
+    assert "⚙️" in task.status_text
 
 
 @pytest.mark.asyncio
@@ -365,7 +365,8 @@ async def test_thinking_actively_edits_single_message_in_place(monkeypatch):
     assert (user_id, thread_id) in _thought_msg_info
     assert _thought_msg_info[(user_id, thread_id)].message_id == 777
 
-    # Step 2: Second thinking task in same turn
+    # Step 2: Second thinking task in same turn (after cooldown)
+    _thought_msg_info[(user_id, thread_id)].last_edit_time = 0.0
     t2 = MessageTask(
         task_type="content",
         content_type="thinking",
@@ -411,3 +412,39 @@ async def test_thinking_actively_edits_single_message_in_place(monkeypatch):
     await _process_content_task(mock_bot, user_id, t3)
 
     assert mock_bot.send_message.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_status_edit_cooldown_prevents_api_flood():
+    from agybot.handlers.message_queue import (
+        _process_status_task,
+        _status_msg_info,
+        _last_status_edit_time,
+    )
+    from agybot.session import session_manager
+
+    user_id = 1227075616
+    thread_id = 888123
+    session_manager.group_chat_ids = {f"{user_id}:{thread_id}": user_id}
+
+    _status_msg_info[(user_id, thread_id)] = (500, "⚙️ *Initial status*")
+    _last_status_edit_time[(user_id, thread_id)] = asyncio.get_event_loop().time()
+
+    mock_bot = MagicMock()
+    mock_bot.edit_message_text = AsyncMock()
+
+    # Immediate second status task within cooldown should be dropped/skipped
+    task = MessageTask(
+        task_type="status",
+        status_text="⚙️ Fast changing status",
+        thread_id=thread_id,
+    )
+    await _process_status_task(mock_bot, user_id, task)
+
+    # edit_message_text should NOT be called because of cooldown
+    assert mock_bot.edit_message_text.call_count == 0
+
+    # After cooldown expires, edit should be dispatched
+    _last_status_edit_time[(user_id, thread_id)] = 0.0
+    await _process_status_task(mock_bot, user_id, task)
+    assert mock_bot.edit_message_text.call_count == 1

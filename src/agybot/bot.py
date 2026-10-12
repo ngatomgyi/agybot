@@ -1126,7 +1126,13 @@ async def post_init(application: Application) -> None:
 
 def create_bot() -> Application:
     """Create and configure python-telegram-bot Application."""
-    rate_limiter = AIORateLimiter(max_retries=5)
+    rate_limiter = AIORateLimiter(
+        overall_max_rate=30,
+        overall_time_period=1.0,
+        group_max_rate=15,
+        group_time_period=60.0,
+        max_retries=3,
+    )
     app = (
         Application.builder()
         .token(config.telegram_bot_token)

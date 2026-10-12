@@ -33,6 +33,10 @@ from .message_sender import (
 logger = logging.getLogger(__name__)
 
 MERGE_CHAR_LIMIT = 3800
+STATUS_EDIT_COOLDOWN = 2.5
+THOUGHT_EDIT_COOLDOWN = 3.0
+
+_last_status_edit_time: dict[tuple[int, int], float] = {}
 
 
 @dataclass
@@ -96,6 +100,7 @@ _status_msg_info: dict[tuple[int, int], tuple[int, str]] = _load_status_msg_info
 def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
     """Clear status message tracking for a topic."""
     _status_msg_info.pop((user_id, thread_id or 0), None)
+    _last_status_edit_time.pop((user_id, thread_id or 0), None)
     _save_status_msg_info()
 
 
@@ -105,6 +110,7 @@ class ThoughtMessageInfo:
 
     message_id: int
     thoughts: list[str]
+    last_edit_time: float = 0.0
 
 
 # (user_id, thread_id_or_0) -> ThoughtMessageInfo
@@ -291,8 +297,10 @@ async def _worker_loop(user_id: int, bot: Bot) -> None:
                     retry_delay = e.retry_after.total_seconds()
                 else:
                     retry_delay = float(e.retry_after)
-                logger.warning("Telegram RateLimit: sleeping %s seconds", retry_delay)
-                await asyncio.sleep(retry_delay + 0.5)
+                logger.warning(
+                    "Telegram RateLimit hit: RetryAfter %s seconds", retry_delay
+                )
+                await asyncio.sleep(min(retry_delay, 30.0) + 0.5)
             except Exception as e:
                 logger.error(
                     "Error processing message task for user %d: %s", user_id, e
@@ -472,6 +480,11 @@ async def _process_thinking_task(
     msg_kwargs = {**common_kwargs, "link_preview_options": NO_LINK_PREVIEW}
 
     if info is not None:
+        now = asyncio.get_event_loop().time()
+        if now - info.last_edit_time < THOUGHT_EDIT_COOLDOWN:
+            info.thoughts = current_thoughts
+            return
+
         # Actively edit existing thought message in-place
         try:
             res = await safe_edit_message(
@@ -483,6 +496,7 @@ async def _process_thinking_task(
             )
             if res:
                 info.thoughts = current_thoughts
+                info.last_edit_time = now
             return
         except BadRequest as e:
             err_str = str(e).lower()
@@ -503,6 +517,7 @@ async def _process_thinking_task(
             _thought_msg_info[key] = ThoughtMessageInfo(
                 message_id=sent.message_id,
                 thoughts=current_thoughts,
+                last_edit_time=asyncio.get_event_loop().time(),
             )
     except Exception as e:
         logger.debug("Could not send thought message: %s", e)
@@ -640,6 +655,12 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
         msg_id, last_text = status_info
         if last_text == display_text:
             return
+
+        now = asyncio.get_event_loop().time()
+        last_time = _last_status_edit_time.get(key, 0.0)
+        if now - last_time < STATUS_EDIT_COOLDOWN:
+            return
+
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -647,6 +668,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                 text=display_text,
                 parse_mode="Markdown",
             )
+            _last_status_edit_time[key] = now
             if key in _status_msg_info and _status_msg_info[key][0] == msg_id:
                 _status_msg_info[key] = (msg_id, display_text)
                 _save_status_msg_info()
@@ -668,6 +690,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                         message_id=msg_id,
                         text=fallback_text,
                     )
+                    _last_status_edit_time[key] = now
                     if key in _status_msg_info and _status_msg_info[key][0] == msg_id:
                         _status_msg_info[key] = (msg_id, fallback_text)
                         _save_status_msg_info()
@@ -686,6 +709,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
             text=display_text,
             **send_kwargs,
         )
+        _last_status_edit_time[key] = asyncio.get_event_loop().time()
         _status_msg_info[key] = (msg.message_id, display_text)
         _save_status_msg_info()
     except BadRequest:

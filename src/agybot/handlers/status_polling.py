@@ -30,8 +30,29 @@ from .message_queue import enqueue_status_update, get_active_tool
 
 logger = logging.getLogger(__name__)
 
-STATUS_POLL_INTERVAL = 1.0
+STATUS_POLL_INTERVAL = 2.0
 TOPIC_CHECK_INTERVAL = 60.0
+
+_last_enqueued_status: dict[tuple[int, int], str] = {}
+
+
+def clear_last_enqueued_status(user_id: int, thread_id: int | None = None) -> None:
+    """Clear cached enqueued status for a thread."""
+    _last_enqueued_status.pop((user_id, thread_id or 0), None)
+
+
+def _get_action_icon(action: str) -> str:
+    """Get stable semantic icon without cycling frame-by-frame animations."""
+    act = action.lower()
+    if any(k in act for k in ("command", "run", "bash", "exec", "git", "pytest", "uv")):
+        return "⚙️"
+    if any(k in act for k in ("read", "view", "inspect", "search", "grep")):
+        return "🔍"
+    if any(k in act for k in ("edit", "write", "patch", "modify", "create")):
+        return "✏️"
+    if any(k in act for k in ("think", "reason", "plan")):
+        return "💭"
+    return "⏳"
 
 
 async def update_status_message(
@@ -61,7 +82,7 @@ async def update_status_message(
         if get_interactive_window(user_id, thread_id) == window_id:
             await clear_interactive_msg(user_id, bot, thread_id)
 
-    # 2. Live terminal status & spinner animation polling
+    # 2. Live terminal status polling without cycling animation spam
     ctx = get_active_tool(user_id, thread_id)
     if not ctx:
         # Agent is idle (turn finished or interrupted with /esc) - do not poll stale terminal text
@@ -69,21 +90,28 @@ async def update_status_message(
 
     spinner_info = extract_spinner_and_status(pane_text)
     if spinner_info:
-        sp, term_text = spinner_info
+        _, term_text = spinner_info
+        raw_act = ctx.action if (ctx.action and ctx.action != "Working…") else term_text
+        icon = _get_action_icon(raw_act)
+
         if ctx.detail or ctx.action not in ("Working…", ""):
             # Active tool known from transcript (e.g. running command or reading file)
-            # Animate the spinner while preserving the specific action and detail!
             if ctx.detail:
-                status_text = f"{sp} {ctx.action}\n{ctx.detail}"
+                status_text = f"{icon} {ctx.action}\n{ctx.detail}"
             else:
-                status_text = f"{sp} {ctx.action}"
+                status_text = f"{icon} {ctx.action}"
         else:
-            # Initial state after prompt / exploring / thinking before tool starts
             clean_term = term_text
             if clean_term.endswith("..."):
                 clean_term = clean_term[:-3] + "…"
-            status_text = f"{sp} {clean_term}"
+            status_text = f"{icon} {clean_term}"
 
+        # Deduplicate: if semantic status hasn't changed, do NOT re-enqueue
+        key = (user_id, thread_id or 0)
+        if _last_enqueued_status.get(key) == status_text:
+            return
+
+        _last_enqueued_status[key] = status_text
         await enqueue_status_update(
             bot,
             user_id,
