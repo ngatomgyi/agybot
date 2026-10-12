@@ -594,3 +594,65 @@ def test_thought_persistence_roundtrip(tmp_path, monkeypatch):
     assert loaded[(123, 456)].thoughts == ["Thinking part 1", "Thinking part 2"]
     assert loaded[(123, 456)].chat_id == 123
 
+
+@pytest.mark.asyncio
+async def test_auto_resolve_bound_windows_in_session_monitor(tmp_path, monkeypatch):
+    from agybot.config import config
+    from agybot.session import WindowState, session_manager
+    from agybot.session_monitor import session_monitor
+
+    brain_dir = tmp_path / "brain"
+    brain_dir.mkdir(parents=True)
+    monkeypatch.setattr(config, "agy_brain_path", brain_dir)
+
+    cid = "test-auto-resolve-cid"
+    t_file = brain_dir / cid / ".system_generated" / "logs" / "transcript.jsonl"
+    t_file.parent.mkdir(parents=True)
+    t_file.write_text('{"role": "assistant", "type": "PLANNER_RESPONSE", "content": "hi"}\n')
+
+    wid = "@test_win"
+    session_manager.thread_bindings = {9999: wid}
+    session_manager.window_states[wid] = WindowState(window_id=wid, session_id="", cwd=str(tmp_path))
+
+    async def mock_auto_resolve(target_wid):
+        if target_wid == wid:
+            session_manager.window_states[wid].session_id = cid
+            return cid
+        return None
+
+    monkeypatch.setattr(session_manager, "auto_resolve_agy_window", mock_auto_resolve)
+
+    active = await session_monitor._get_active_sessions()
+    assert any(s.session_id == cid for s in active)
+    assert session_manager.window_states[wid].session_id == cid
+
+
+@pytest.mark.asyncio
+async def test_clear_command_clears_window_session_id(monkeypatch):
+    from agybot.bot import clear_command
+    from agybot.session import WindowState, session_manager
+    from agybot.tmux_manager import tmux_manager
+
+    wid = "@clear_win"
+    thread_id = 8888
+    session_manager.thread_bindings = {thread_id: wid}
+    session_manager.window_states[wid] = WindowState(window_id=wid, session_id="old-cid", cwd="/tmp")
+
+    mock_update = MagicMock()
+    mock_update.effective_user.id = 1227075616
+    mock_update.effective_message.message_thread_id = thread_id
+    mock_update.message.message_thread_id = thread_id
+    mock_update.message.reply_text = AsyncMock()
+
+    mock_context = MagicMock()
+
+    monkeypatch.setattr(tmux_manager, "send_keys", AsyncMock())
+    monkeypatch.setattr("agybot.bot.is_user_allowed", lambda uid: True)
+
+    await clear_command(mock_update, mock_context)
+
+    # Verifies session_id was cleared so next turn triggers re-resolution
+    assert session_manager.get_window_state(wid).session_id == ""
+    tmux_manager.send_keys.assert_called_once_with(wid, "/clear", enter=True)
+
+

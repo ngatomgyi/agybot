@@ -271,29 +271,39 @@ class SessionManager:
             pane_pid = pane_pids[0].strip()
 
             def _find_agy_conv(pid_str: str) -> str | None:
-                try:
-                    with open(f"/proc/{pid_str}/task/{pid_str}/children", "r") as f:
-                        children = f.read().split()
-                except Exception:
-                    children = []
+                descendants = []
+                queue = [pid_str]
+                while queue:
+                    curr = queue.pop(0)
+                    try:
+                        with open(f"/proc/{curr}/task/{curr}/children", "r") as f:
+                            ch = f.read().split()
+                        descendants.extend(ch)
+                        queue.extend(ch)
+                    except Exception:
+                        pass
 
-                for cpid in children:
+                for cpid in descendants:
                     try:
                         with open(f"/proc/{cpid}/cmdline", "rb") as f:
                             cmd = f.read().decode("utf-8", errors="ignore")
                         if "agy" not in cmd:
                             continue
 
-                        # 1. Check open file descriptors for active CLI log file
+                        # 1. Check open file descriptors for active presence lock file or CLI log file
                         fd_dir = f"/proc/{cpid}/fd"
                         log_path = None
                         if os.path.exists(fd_dir):
                             for fd in os.listdir(fd_dir):
                                 try:
                                     target = os.readlink(os.path.join(fd_dir, fd))
+                                    m = re.search(
+                                        r"presence/([0-9a-f-]{36})\.lock", target
+                                    )
+                                    if m:
+                                        return m.group(1)
                                     if "log/cli-" in target and os.path.exists(target):
                                         log_path = target
-                                        break
                                 except OSError:
                                     pass
 

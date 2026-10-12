@@ -240,6 +240,11 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, "❌ No window bound to this topic.")
         return
 
+    # Reset session_id so auto-resolution immediately picks up the new conversation
+    ws = session_manager.get_window_state(wid)
+    ws.session_id = ""
+    session_manager._save_state()
+
     await tmux_manager.send_keys(wid, "/clear", enter=True)
     await safe_reply(update.message, "🧹 Sent /clear to Antigravity session.")
 
@@ -651,6 +656,13 @@ async def handle_inbound_message(
 
     # 1. Topic already bound to a window -> forward prompt or queue if busy
     if wid:
+        ws = session_manager.get_window_state(wid)
+        if not ws.session_id:
+            try:
+                await session_manager.auto_resolve_agy_window(wid)
+            except Exception as e:
+                logger.debug("Failed to auto-resolve agy window in inbound: %s", e)
+
         if is_thread_busy(user.id, thread_id):
             pos = queue_inbound_prompt(user.id, thread_id, prompt_text)
             clean_preview = prompt_text
@@ -740,6 +752,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if 0 <= idx < len(unbound) and thread_id is not None:
             wid, name, cwd = unbound[idx]
             session_manager.bind_thread(thread_id, wid)
+            session_manager.set_window_display_name(wid, name)
+            ws = session_manager.get_window_state(wid)
+            ws.cwd = cwd
+            ws.window_name = name
+            await session_manager.auto_resolve_agy_window(wid)
             await query.answer(f"Attached window {name}")
             await safe_edit(
                 query.message, f"🔗 Bound topic to tmux window `{name}` ({wid})"
@@ -747,7 +764,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # Forward pending text if any
             pending_text = user_data.pop("_pending_thread_text", None)
             if pending_text:
-                await tmux_manager.send_keys(wid, pending_text, enter=True)
+                clean_prompt = pending_text.replace("\n", " ")
+                await tmux_manager.send_keys(wid, clean_prompt, enter=True)
+                uid = (
+                    user.id
+                    if user
+                    else session_manager.resolve_user_id_for_thread(thread_id)
+                )
+                if uid:
+                    set_active_tool(uid, thread_id, "Working…", "")
+                    await enqueue_status_update(
+                        context.bot,
+                        uid,
+                        wid,
+                        "⏳ Working…",
+                        thread_id,
+                    )
             clear_browse_state(user_data)
         return
 
@@ -967,6 +999,28 @@ async def _create_and_bind_window(
 
     session_manager.bind_thread(thread_id, wid)
     session_manager.set_window_display_name(wid, final_name)
+    ws = session_manager.get_window_state(wid)
+    ws.cwd = chosen_dir
+    ws.window_name = final_name
+
+    if conversation_id:
+        ws.session_id = conversation_id
+        session_manager._save_state()
+        await session_manager._record_session_map_entry(
+            wid, conversation_id, cwd=chosen_dir, window_name=final_name
+        )
+        t_path = (
+            config.agy_brain_path
+            / conversation_id
+            / ".system_generated"
+            / "logs"
+            / "transcript.jsonl"
+        )
+        if t_path.exists():
+            session_monitor.state.update_offset(
+                conversation_id, t_path, t_path.stat().st_size
+            )
+            session_monitor.state.save()
 
     # Auto-rename Telegram topic if enabled
     if config.auto_rename_topics:
@@ -990,10 +1044,54 @@ async def _create_and_bind_window(
     # Forward any pending initial user message
     user_data = context.user_data if context.user_data is not None else {}
     pending_text = user_data.pop("_pending_thread_text", None)
-    if pending_text:
-        await tmux_manager.send_keys(wid, pending_text, enter=True)
-
+    user_id = (
+        query.from_user.id
+        if (query and query.from_user)
+        else session_manager.resolve_user_id_for_thread(thread_id)
+    )
+    bot = context.bot
     clear_browse_state(user_data)
+
+    async def _init_and_forward(
+        target_wid: str,
+        t_id: int,
+        u_id: int,
+        p_text: str | None,
+        target_cid: str | None,
+    ) -> None:
+        resolved_cid = target_cid
+        for _ in range(30):  # poll up to 15 seconds (30 * 0.5s)
+            if resolved_cid:
+                break
+            await asyncio.sleep(0.5)
+            resolved_cid = await session_manager.auto_resolve_agy_window(target_wid)
+
+        if not resolved_cid:
+            logger.warning("Could not auto-resolve session for window %s", target_wid)
+
+        if p_text:
+            await asyncio.sleep(0.5)
+            clean_prompt = p_text.replace("\n", " ")
+            await tmux_manager.send_keys(target_wid, clean_prompt, enter=True)
+            if u_id:
+                set_active_tool(u_id, t_id, "Working…", "")
+                await enqueue_status_update(
+                    bot,
+                    u_id,
+                    target_wid,
+                    "⏳ Working…",
+                    t_id,
+                )
+
+    asyncio.create_task(
+        _init_and_forward(
+            wid,
+            thread_id,
+            user_id,
+            pending_text,
+            conversation_id,
+        )
+    )
 
 
 # --- Outbound Message Dispatcher from Transcript ---

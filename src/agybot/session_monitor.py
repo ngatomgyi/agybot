@@ -97,6 +97,24 @@ class SessionMonitor:
         sessions: list[SessionInfo] = []
         seen_sids: set[str] = set()
 
+        # Proactively ensure all bound windows have their session_id resolved
+        self._periodic_check_counter = (
+            getattr(self, "_periodic_check_counter", 0) + 1
+        )
+        periodic_sync = self._periodic_check_counter % 10 == 0
+
+        for thread_id, wid in list(session_manager.thread_bindings.items()):
+            ws = session_manager.get_window_state(wid)
+            if not ws.session_id or periodic_sync:
+                try:
+                    await session_manager.auto_resolve_agy_window(wid)
+                except Exception as e:
+                    logger.debug(
+                        "Failed to auto-resolve bound window %s in monitor: %s",
+                        wid,
+                        e,
+                    )
+
         # 1. From live window states
         for ws in session_manager.window_states.values():
             if ws.session_id and ws.session_id not in seen_sids:
