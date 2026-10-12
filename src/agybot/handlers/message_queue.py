@@ -97,10 +97,34 @@ def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
     _save_status_msg_info()
 
 
+def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
+    """Drain and discard pending status/content tasks for a specific thread."""
+    queue = _user_queues.get(user_id)
+    if not queue or queue.empty():
+        return
+    tid = thread_id or 0
+    remaining: list[MessageTask] = []
+    while not queue.empty():
+        try:
+            task = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        task_tid = task.thread_id or 0
+        if task_tid == tid:
+            queue.task_done()
+        else:
+            remaining.append(task)
+    for task in remaining:
+        queue.put_nowait(task)
+
+
 async def cleanup_status_for_thread(
     bot: Bot, user_id: int, thread_id: int | None = None
 ) -> None:
     """Delete any active or orphaned status message for this thread."""
+    clear_active_tool(user_id, thread_id)
+    drain_tasks_for_thread(user_id, thread_id)
+
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     if not chat_id:
         return
@@ -118,7 +142,6 @@ async def cleanup_status_for_thread(
                 logger.debug("Could not delete status message: %s", e)
     if matched_keys:
         _save_status_msg_info()
-    clear_active_tool(user_id, thread_id)
 
 
 @dataclass
@@ -455,8 +478,9 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                 text=display_text,
                 parse_mode="Markdown",
             )
-            _status_msg_info[key] = (msg_id, display_text)
-            _save_status_msg_info()
+            if key in _status_msg_info and _status_msg_info[key][0] == msg_id:
+                _status_msg_info[key] = (msg_id, display_text)
+                _save_status_msg_info()
             return
         except BadRequest as e:
             err_str = str(e).lower()
@@ -472,8 +496,9 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
                         message_id=msg_id,
                         text=fallback_text,
                     )
-                    _status_msg_info[key] = (msg_id, fallback_text)
-                    _save_status_msg_info()
+                    if key in _status_msg_info and _status_msg_info[key][0] == msg_id:
+                        _status_msg_info[key] = (msg_id, fallback_text)
+                        _save_status_msg_info()
                     return
                 except Exception:
                     pass

@@ -186,3 +186,53 @@ async def test_cleanup_status_for_thread():
     mock_bot.delete_message.assert_called_once_with(chat_id=1227075616, message_id=200)
     assert (1227075616, 178763) not in _status_msg_info
 
+
+def test_drain_tasks_for_thread():
+    from agybot.handlers.message_queue import (
+        MessageTask,
+        drain_tasks_for_thread,
+        _user_queues,
+    )
+    import asyncio
+
+    q = asyncio.Queue()
+    _user_queues[999] = q
+
+    q.put_nowait(MessageTask(task_type="status", thread_id=101, status_text="t1"))
+    q.put_nowait(MessageTask(task_type="content", thread_id=102, parts=["other"]))
+    q.put_nowait(MessageTask(task_type="status", thread_id=101, status_text="t2"))
+
+    drain_tasks_for_thread(999, 101)
+
+    assert not q.empty()
+    remaining = q.get_nowait()
+    assert remaining.thread_id == 102
+    assert q.empty()
+
+
+@pytest.mark.asyncio
+async def test_update_status_message_idle_does_not_enqueue(monkeypatch):
+    from agybot.handlers.message_queue import (
+        clear_active_tool,
+        _user_queues,
+    )
+    from agybot.handlers.status_polling import update_status_message
+    from agybot.tmux_manager import tmux_manager
+
+    # Explicitly clear active tool
+    clear_active_tool(1227075616, 178763)
+
+    monkeypatch.setattr(
+        tmux_manager,
+        "capture_pane",
+        AsyncMock(return_value="⣾  Running command...\n> "),
+    )
+
+    mock_bot = MagicMock()
+    # When idle (no ctx), update_status_message must do nothing
+    await update_status_message(mock_bot, 1227075616, "@1", 178763)
+
+    if 1227075616 in _user_queues:
+        assert _user_queues[1227075616].empty()
+
+

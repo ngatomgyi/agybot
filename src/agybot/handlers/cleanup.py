@@ -11,7 +11,11 @@ from typing import Any
 from telegram import Bot
 
 from .interactive_ui import clear_interactive_msg
-from .message_queue import clear_status_msg_info
+from .message_queue import (
+    clear_active_tool,
+    clear_status_msg_info,
+    drain_tasks_for_thread,
+)
 
 
 async def clear_topic_state(
@@ -22,6 +26,8 @@ async def clear_topic_state(
 ) -> None:
     """Clear all memory and UI state associated with a topic."""
     clear_status_msg_info(user_id, thread_id)
+    clear_active_tool(user_id, thread_id)
+    drain_tasks_for_thread(user_id, thread_id)
     await clear_interactive_msg(user_id, bot, thread_id)
 
     if user_data is not None:

@@ -148,6 +148,9 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await safe_reply(update.message, "❌ No window bound to this topic.")
         return
 
+    # Clean up active ephemeral status message, clear tool context, and drain queued tasks
+    await cleanup_status_for_thread(context.bot, user.id, thread_id)
+
     success = await tmux_manager.send_interrupt(wid)
     if success:
         await safe_reply(update.message, "⏹ Sent Escape interrupt to Antigravity.")

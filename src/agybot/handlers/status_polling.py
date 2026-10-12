@@ -62,11 +62,15 @@ async def update_status_message(
             await clear_interactive_msg(user_id, bot, thread_id)
 
     # 2. Live terminal status & spinner animation polling
+    ctx = get_active_tool(user_id, thread_id)
+    if not ctx:
+        # Agent is idle (turn finished or interrupted with /esc) - do not poll stale terminal text
+        return
+
     spinner_info = extract_spinner_and_status(pane_text)
     if spinner_info:
         sp, term_text = spinner_info
-        ctx = get_active_tool(user_id, thread_id)
-        if ctx and (ctx.detail or ctx.action not in ("Working…", "")):
+        if ctx.detail or ctx.action not in ("Working…", ""):
             # Active tool known from transcript (e.g. running command or reading file)
             # Animate the spinner while preserving the specific action and detail!
             if ctx.detail:
