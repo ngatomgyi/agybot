@@ -128,7 +128,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• `/artifacts` - Download all generated code/markdown artifacts\n"
         "• `/esc` - Interrupt current execution turn\n"
         "• `/unbind` - Unbind topic from window\n"
-        "• `/kill` - Kill tmux window and unbind topic\n"
+        "• `/kill` or `/close` - Close/kill tmux window and unbind topic\n"
         "• `/clear` - Clear conversation context\n"
         "• `/usage` - View session stats\n\n"
         "_To get started, create a new Forum Topic in this supergroup and send a message!_"
@@ -178,14 +178,14 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /kill command."""
+    """Handle /kill or /close command."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id) or not update.message:
         return
 
     thread_id = _get_thread_id(update)
     if thread_id is None:
-        await safe_reply(update.message, "❌ /kill can only be run in a forum topic.")
+        await safe_reply(update.message, "❌ /kill or /close can only be run in a forum topic.")
         return
 
     wid = session_manager.unbind_thread(thread_id)
@@ -906,6 +906,7 @@ async def post_init(application: Application) -> None:
         BotCommand("usage", "Session statistics"),
         BotCommand("unbind", "Unbind topic from window"),
         BotCommand("kill", "Kill window and unbind topic"),
+        BotCommand("close", "Close window and unbind topic"),
     ]
     try:
         await application.bot.set_my_commands(commands)
@@ -941,7 +942,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("esc", esc_command))
     app.add_handler(CommandHandler("unbind", unbind_command))
-    app.add_handler(CommandHandler("kill", kill_command))
+    app.add_handler(CommandHandler(["kill", "close"], kill_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("usage", usage_command))
     app.add_handler(CommandHandler("artifacts", artifacts_command))
