@@ -118,6 +118,47 @@ async def cleanup_status_for_thread(
                 logger.debug("Could not delete status message: %s", e)
     if matched_keys:
         _save_status_msg_info()
+    clear_active_tool(user_id, thread_id)
+
+
+@dataclass
+class ActiveToolContext:
+    """Active tool action and detail context for a thread."""
+
+    action: str
+    detail: str = ""
+    timestamp: float = 0.0
+
+
+_active_tool_contexts: dict[tuple[int, int], ActiveToolContext] = {}
+
+
+def set_active_tool(
+    user_id: int, thread_id: int | None, action: str, detail: str = ""
+) -> None:
+    """Set the current active tool or state for a thread."""
+    key = (user_id, thread_id or 0)
+    try:
+        loop_time = asyncio.get_event_loop().time()
+    except RuntimeError:
+        loop_time = 0.0
+    _active_tool_contexts[key] = ActiveToolContext(
+        action=action, detail=detail, timestamp=loop_time
+    )
+
+
+def get_active_tool(
+    user_id: int, thread_id: int | None
+) -> ActiveToolContext | None:
+    """Get the current active tool or state for a thread."""
+    key = (user_id, thread_id or 0)
+    return _active_tool_contexts.get(key)
+
+
+def clear_active_tool(user_id: int, thread_id: int | None) -> None:
+    """Clear active tool context for a thread."""
+    key = (user_id, thread_id or 0)
+    _active_tool_contexts.pop(key, None)
 
 
 def get_message_queue(user_id: int, bot: Bot) -> asyncio.Queue[MessageTask]:
@@ -324,6 +365,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 logger.debug("Could not delete ephemeral status message: %s", e)
     if matched_keys:
         _save_status_msg_info()
+    clear_active_tool(user_id, task.thread_id)
 
     common_kwargs: dict[str, Any] = {}
     if task.thread_id is not None:
@@ -371,16 +413,35 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
         title = raw_status
         detail = ""
 
-    clean_title = title.replace("`", "").replace("*", "").strip()
+    from ..terminal_parser import _SPINNERS
+
+    sp = ""
+    remainder_title = title
+    for spinner_char in _SPINNERS:
+        if title.startswith(spinner_char):
+            sp = spinner_char
+            remainder_title = title[len(spinner_char) :].strip()
+            break
+    if not sp and any(title.startswith(ic) for ic in ("🧠", "💭", "⚡", "🔍", "⚙️")):
+        sp = title[0]
+        remainder_title = title[1:].strip()
+    if not sp:
+        sp = "⚙️"
+
+    clean_title = remainder_title.replace("`", "").replace("*", "").strip()
+    if not clean_title:
+        clean_title = "Working…"
+
+    prefix = f"{sp} " if sp else ""
     if detail:
         clean_detail = detail.replace("`", "'").strip()
         if len(clean_detail) > 180:
             clean_detail = clean_detail[:177] + "…"
-        display_text = f"⚙️ *{clean_title}*\n`{clean_detail}`"
-        fallback_text = f"⚙️ {clean_title}\n{clean_detail}"
+        display_text = f"{prefix}*{clean_title}*\n`{clean_detail}`"
+        fallback_text = f"{prefix}{clean_title}\n{clean_detail}"
     else:
-        display_text = f"⚙️ *{clean_title}*"
-        fallback_text = f"⚙️ {clean_title}"
+        display_text = f"{prefix}*{clean_title}*"
+        fallback_text = f"{prefix}{clean_title}"
 
     status_info = _status_msg_info.get(key)
     if status_info:

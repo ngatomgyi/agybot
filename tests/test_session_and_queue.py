@@ -128,9 +128,16 @@ def test_try_merge_status_tasks():
 
 
 @pytest.mark.asyncio
-async def test_update_status_message_does_not_enqueue_generic_status(monkeypatch):
+async def test_update_status_message_preserves_active_tool_with_spinner(monkeypatch):
+    from agybot.handlers.message_queue import (
+        set_active_tool,
+        _user_queues,
+    )
     from agybot.handlers.status_polling import update_status_message
     from agybot.tmux_manager import tmux_manager
+
+    # Set active tool context
+    set_active_tool(1227075616, 178763, "Running command…", "git diff")
 
     # Mock capture pane returning terminal spinner text
     monkeypatch.setattr(
@@ -140,13 +147,14 @@ async def test_update_status_message_does_not_enqueue_generic_status(monkeypatch
     )
 
     mock_bot = MagicMock()
-    # update_status_message should NOT raise, and should NOT enqueue any generic status
     await update_status_message(mock_bot, 1227075616, "@1", 178763)
-    # The bot queue should not have any tasks enqueued from update_status_message
-    from agybot.handlers.message_queue import _user_queues
 
-    if 1227075616 in _user_queues:
-        assert _user_queues[1227075616].empty()
+    # Verifies task was enqueued preserving command detail and updating spinner
+    assert 1227075616 in _user_queues
+    task = _user_queues[1227075616].get_nowait()
+    assert task.task_type == "status"
+    assert "git diff" in task.status_text
+    assert "⣾" in task.status_text
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,10 @@ from telegram import Bot
 from telegram.error import BadRequest
 
 from ..session import session_manager
-from ..terminal_parser import extract_interactive_content
+from ..terminal_parser import (
+    extract_interactive_content,
+    extract_spinner_and_status,
+)
 from ..tmux_manager import tmux_manager
 from .cleanup import clear_topic_state
 from .interactive_ui import (
@@ -23,6 +26,7 @@ from .interactive_ui import (
     get_interactive_window,
     handle_interactive_ui,
 )
+from .message_queue import enqueue_status_update, get_active_tool
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,33 @@ async def update_status_message(
         # If was in interactive mode but prompt disappeared, clear it
         if get_interactive_window(user_id, thread_id) == window_id:
             await clear_interactive_msg(user_id, bot, thread_id)
+
+    # 2. Live terminal status & spinner animation polling
+    spinner_info = extract_spinner_and_status(pane_text)
+    if spinner_info:
+        sp, term_text = spinner_info
+        ctx = get_active_tool(user_id, thread_id)
+        if ctx and (ctx.detail or ctx.action not in ("Working…", "")):
+            # Active tool known from transcript (e.g. running command or reading file)
+            # Animate the spinner while preserving the specific action and detail!
+            if ctx.detail:
+                status_text = f"{sp} {ctx.action}\n{ctx.detail}"
+            else:
+                status_text = f"{sp} {ctx.action}"
+        else:
+            # Initial state after prompt / exploring / thinking before tool starts
+            clean_term = term_text
+            if clean_term.endswith("..."):
+                clean_term = clean_term[:-3] + "…"
+            status_text = f"{sp} {clean_term}"
+
+        await enqueue_status_update(
+            bot,
+            user_id,
+            window_id,
+            status_text,
+            thread_id,
+        )
 
 
 async def status_poll_loop(bot: Bot) -> None:

@@ -73,6 +73,7 @@ from .handlers.message_queue import (
     cleanup_status_for_thread,
     enqueue_content_message,
     enqueue_status_update,
+    set_active_tool,
 )
 from .handlers.message_sender import (
     safe_edit,
@@ -481,6 +482,14 @@ async def handle_inbound_message(
     if wid:
         clean_prompt = prompt_text.replace("\n", " ")
         await tmux_manager.send_keys(wid, clean_prompt, enter=True)
+        set_active_tool(user.id, thread_id, "Working…", "")
+        await enqueue_status_update(
+            context.bot,
+            user.id,
+            wid,
+            "⠋ Working…",
+            thread_id,
+        )
         return
 
     # 2. Topic is unbound -> Show Window Picker or Directory Browser
@@ -834,9 +843,20 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if not msg.text:
             return
         if msg.content_type == "thinking":
-            status_text = "Thinking…"
+            action = "Thinking…"
+            detail = ""
         else:
-            status_text = msg.text.replace("**", "").strip()
+            raw = msg.text.replace("**", "").strip()
+            if "\n" in raw:
+                action, detail = raw.split("\n", 1)
+                action = action.strip()
+                detail = detail.strip()
+            else:
+                action = raw
+                detail = ""
+
+        set_active_tool(user_id, thread_id, action, detail)
+        status_text = f"⠋ {action}\n{detail}" if detail else f"⠋ {action}"
 
         await enqueue_status_update(
             bot=bot,

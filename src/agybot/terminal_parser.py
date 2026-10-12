@@ -165,6 +165,29 @@ def parse_status_line(text: str) -> str | None:
     return None
 
 
+def extract_spinner_and_status(text: str) -> tuple[str, str] | None:
+    """Extract (spinner_char, status_text) from active terminal output."""
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return None
+
+    for line in reversed(lines[-6:]):
+        for sp in _SPINNERS:
+            if line.startswith(sp):
+                remainder = line[len(sp) :].strip()
+                return (sp, remainder or "Working…")
+        if "Thought for " in line:
+            return ("🧠", line)
+        if "Thinking..." in line or "Thinking…" in line:
+            return ("💭", "Thinking…")
+        if "Running command" in line:
+            return ("⚡", "Running command…")
+        if "Explored " in line:
+            return ("🔍", line)
+
+    return None
+
+
 def strip_pane_chrome(text: str) -> str:
     """Strip input bar and bottom status chrome from pane capture."""
     lines = text.split("\n")
