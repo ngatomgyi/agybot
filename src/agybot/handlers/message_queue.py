@@ -167,8 +167,14 @@ _thought_msg_info: dict[tuple[int, int], ThoughtMessageInfo] = _load_thought_msg
 
 def clear_thought_msg_info(user_id: int, thread_id: int | None = None) -> None:
     """Clear thought message tracking for a topic."""
-    _thought_msg_info.pop((user_id, thread_id or 0), None)
-    _save_thought_msg_info()
+    tid = thread_id or 0
+    matched = [
+        k for k in list(_thought_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
+    ]
+    for k in matched:
+        _thought_msg_info.pop(k, None)
+    if matched:
+        _save_thought_msg_info()
 
 
 def drain_tasks_for_thread(user_id: int, thread_id: int | None = None) -> None:
@@ -248,20 +254,8 @@ async def cleanup_status_for_thread(
     if matched_keys:
         _save_status_msg_info()
 
-    # 2. Delete thought message
-    thought_keys = [
-        k for k in list(_thought_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
-    ]
-    for k in thought_keys:
-        t_info = _thought_msg_info.pop(k, None)
-        if t_info:
-            target_chat = t_info.chat_id or chat_id
-            try:
-                await bot.delete_message(chat_id=target_chat, message_id=t_info.message_id)
-            except Exception as e:
-                logger.info("Could not delete thought message %d: %s", t_info.message_id, e)
-    if thought_keys:
-        _save_thought_msg_info()
+    # 2. Reset thought tracking for next turn without deleting existing thought message from chat
+    clear_thought_msg_info(user_id, thread_id)
 
 
 @dataclass
@@ -633,19 +627,36 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # Drain any remaining thinking tasks for this thread from queue so stale thoughts cannot pop up after final text
     _drain_thinking_tasks_for_thread(user_id, task.thread_id)
 
-    # Ephemeral thought messages: delete when final content is delivered
+    # Finalize thought message for this turn and keep it permanently sitting above output:
     tid = task.thread_id or 0
     thought_keys = [
         k for k in list(_thought_msg_info.keys()) if k[1] == tid or k == (user_id, tid)
     ]
     for k in thought_keys:
         t_info = _thought_msg_info.pop(k, None)
-        if t_info:
+        if t_info and t_info.thoughts:
+            combined_inner = "\n\n".join(t_info.thoughts)
+            max_inner = 3500
+            if len(combined_inner) > max_inner:
+                combined_inner = (
+                    "… (earlier thoughts truncated)\n\n"
+                    + combined_inner[-(max_inner - 35) :]
+                )
+            combined_text = (
+                f"💭 *Thought:*\n"
+                f"{TranscriptParser.EXPANDABLE_QUOTE_START}{combined_inner}{TranscriptParser.EXPANDABLE_QUOTE_END}"
+            )
             target_chat = t_info.chat_id or chat_id
             try:
-                await bot.delete_message(chat_id=target_chat, message_id=t_info.message_id)
+                await safe_edit_message(
+                    bot,
+                    chat_id=target_chat,
+                    message_id=t_info.message_id,
+                    text=combined_text,
+                    link_preview_options=NO_LINK_PREVIEW,
+                )
             except Exception as e:
-                logger.info("Could not delete ephemeral thought message %d: %s", t_info.message_id, e)
+                logger.debug("Could not flush final thought text: %s", e)
     if thought_keys:
         _save_thought_msg_info()
 
