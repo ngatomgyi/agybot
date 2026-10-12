@@ -713,6 +713,7 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
         title = raw_status
         detail = ""
 
+    from .status_polling import get_action_icon
     from ..terminal_parser import _SPINNERS
 
     sp = ""
@@ -720,20 +721,26 @@ async def _process_status_task(bot: Bot, user_id: int, task: MessageTask) -> Non
     for spinner_char in _SPINNERS:
         if title.startswith(spinner_char):
             remainder_title = title[len(spinner_char) :].strip()
-            sp = "•"
             break
-    if not sp and (title.startswith("•") or title.startswith("●") or title.startswith("#")):
-        sp = "#" if title.startswith("#") else "•"
-        remainder_title = title[1:].strip()
-    if not sp and any(title.startswith(ic) for ic in ("🧠", "💭", "⚡", "🔍", "⚙️", "✏️", "⏳")):
-        sp = title[0]
-        remainder_title = title[1:].strip()
-    if not sp:
-        sp = "⚙️"
+
+    if remainder_title.startswith("•") or remainder_title.startswith("●"):
+        remainder_title = remainder_title[1:].strip()
+    elif remainder_title.startswith("#"):
+        remainder_title = remainder_title[1:].strip()
+
+    # Check if remainder_title already starts with a known semantic icon
+    for ic in ("⚙️", "🔍", "✏️", "🌐", "💭", "🤖", "❓", "⏳", "🧠", "⚡"):
+        if remainder_title.startswith(ic):
+            sp = ic
+            remainder_title = remainder_title[len(ic) :].strip()
+            break
 
     clean_title = remainder_title.replace("`", "").replace("*", "").strip()
     if not clean_title:
         clean_title = "Working…"
+
+    if not sp:
+        sp = get_action_icon(clean_title)
 
     prefix = f"{sp} " if sp else ""
     if detail:

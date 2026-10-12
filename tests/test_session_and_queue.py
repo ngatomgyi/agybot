@@ -141,7 +141,47 @@ async def test_process_status_task_replaces_spinner_with_dot():
 
     mock_bot.send_message.assert_called_once()
     sent_text = mock_bot.send_message.call_args.kwargs["text"]
-    assert sent_text == "• *Working…*"
+    assert sent_text == "⏳ *Working…*"
+
+    # Test command emoji
+    clear_status_msg_info(user_id, thread_id)
+    task2 = MessageTask(
+        task_type="status",
+        status_text="Running command…\npytest",
+        thread_id=thread_id,
+    )
+    await _process_status_task(mock_bot, user_id, task2)
+    assert "⚙️ *Running command…*" in mock_bot.send_message.call_args.kwargs["text"]
+
+    # Test read files emoji
+    clear_status_msg_info(user_id, thread_id)
+    task3 = MessageTask(
+        task_type="status",
+        status_text="Reading files…\nsrc/bot.py",
+        thread_id=thread_id,
+    )
+    await _process_status_task(mock_bot, user_id, task3)
+    assert "🔍 *Reading files…*" in mock_bot.send_message.call_args.kwargs["text"]
+
+    # Test edit files emoji
+    clear_status_msg_info(user_id, thread_id)
+    task4 = MessageTask(
+        task_type="status",
+        status_text="Editing files…\nsrc/bot.py",
+        thread_id=thread_id,
+    )
+    await _process_status_task(mock_bot, user_id, task4)
+    assert "✏️ *Editing files…*" in mock_bot.send_message.call_args.kwargs["text"]
+
+    # Test search web emoji
+    clear_status_msg_info(user_id, thread_id)
+    task5 = MessageTask(
+        task_type="status",
+        status_text="Searching web…\ntelegram api",
+        thread_id=thread_id,
+    )
+    await _process_status_task(mock_bot, user_id, task5)
+    assert "🌐 *Searching web…*" in mock_bot.send_message.call_args.kwargs["text"]
 
 
 def test_try_merge_status_tasks():

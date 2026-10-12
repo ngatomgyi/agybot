@@ -41,18 +41,27 @@ def clear_last_enqueued_status(user_id: int, thread_id: int | None = None) -> No
     _last_enqueued_status.pop((user_id, thread_id or 0), None)
 
 
-def _get_action_icon(action: str) -> str:
-    """Get stable semantic icon without cycling frame-by-frame animations."""
+def get_action_icon(action: str) -> str:
+    """Get stable semantic emoji icon for a specific agent action or tool."""
     act = action.lower()
     if any(k in act for k in ("command", "run", "bash", "exec", "git", "pytest", "uv")):
         return "⚙️"
+    if any(k in act for k in ("web", "url", "http", "browse")):
+        return "🌐"
     if any(k in act for k in ("read", "view", "inspect", "search", "grep")):
         return "🔍"
     if any(k in act for k in ("edit", "write", "patch", "modify", "create")):
         return "✏️"
     if any(k in act for k in ("think", "reason", "plan")):
         return "💭"
+    if any(k in act for k in ("subagent", "agent")):
+        return "🤖"
+    if any(k in act for k in ("question", "ask")):
+        return "❓"
     return "⏳"
+
+
+_get_action_icon = get_action_icon
 
 
 async def update_status_message(

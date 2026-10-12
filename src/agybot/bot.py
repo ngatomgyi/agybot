@@ -89,7 +89,7 @@ from .handlers.message_sender import (
     send_photo,
 )
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import status_poll_loop
+from .handlers.status_polling import get_action_icon, status_poll_loop
 from .caveman import (
     is_caveman_rule_active,
     is_caveman_skill_installed,
@@ -670,7 +670,7 @@ async def handle_inbound_message(
             context.bot,
             user.id,
             wid,
-            "• Working…",
+            "⏳ Working…",
             thread_id,
         )
         return
@@ -1044,7 +1044,8 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             detail = ""
 
         set_active_tool(user_id, thread_id, action, detail)
-        status_text = f"• {action}\n{detail}" if detail else f"• {action}"
+        icon = get_action_icon(action)
+        status_text = f"{icon} {action}\n{detail}" if detail else f"{icon} {action}"
 
         await enqueue_status_update(
             bot=bot,
