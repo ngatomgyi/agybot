@@ -69,6 +69,14 @@ Compress the style, not the language. An explicit reply-language instruction win
 
 No "caveman mode on", no "me think", no "Caveman:" prefix, no normal answer plus caveman copy. No decorative tables or emoji. Never add a word to sound caveman. Caveman phrasing not shorter than plain? Use plain.
 
+### 11. Markdown visual hierarchy
+
+Always format chat responses with Markdown hierarchy:
+- Use `### Headers` for sections (e.g. `### Cause`, `### Fix Applied`, `### Next Steps`).
+- Use `**bold**` for key terms, file names, or leading item labels.
+- Use bullet lists (`- **Item**: details`) instead of long running paragraphs.
+- Keep sentences terse, but visually structured.
+
 ## When to break the rules
 
 Plain prose, then resume:

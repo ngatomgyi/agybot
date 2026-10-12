@@ -44,6 +44,13 @@ Apply caveman compression to internal reasoning / thinking process:
 - No rambling self-dialogue or long internal essays.
 - Short bullets: identify problem, select tool, execute. Minimize reasoning tokens.
 
+### 11. Markdown visual hierarchy
+Always format chat responses with Markdown hierarchy:
+- Use `### Headers` for sections (e.g. `### Cause`, `### Fix Applied`, `### Next Steps`).
+- Use `**bold**` for key terms, file names, or leading item labels.
+- Use bullet lists (`- **Item**: details`) instead of long running paragraphs.
+- Keep sentences terse, but visually structured.
+
 ## When to break rules (Use full sentences):
 1. Security warnings.
 2. Irreversible actions. Confirm in full sentences first.
