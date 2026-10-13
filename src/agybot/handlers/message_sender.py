@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import logging
+from pathlib import Path
 from typing import Any
 
 from telegram import Bot, LinkPreviewOptions, Message
@@ -175,23 +176,97 @@ async def send_photo(
 async def send_document(
     bot: Bot,
     chat_id: int,
-    document_data: list[tuple[str, bytes]],
+    document_data: list[tuple[str, bytes | Path | str]],
+    message_thread_id: int | None = None,
+    caption: str | None = None,
     **kwargs: Any,
 ) -> None:
-    """Send documents (e.g. artifacts) to chat_id."""
+    """Send documents (e.g. artifacts) to chat_id.
+
+    Supports both standard Telegram Bot API (<= 50MB) and Telegram Developer API (up to 2GB).
+    """
     if not document_data:
         return
-    for filename, raw_bytes in document_data:
-        try:
-            bio = io.BytesIO(raw_bytes)
-            bio.name = filename
-            await bot.send_document(
-                chat_id=chat_id,
-                document=bio,
-                filename=filename,
-                **kwargs,
+
+    from ..telethon_uploader import is_telethon_available, upload_large_file
+
+    # Extract thread ID from kwargs if not explicitly passed
+    tid = message_thread_id or kwargs.pop("message_thread_id", None)
+
+    for filename, data_or_path in document_data:
+        file_path: Path | None = None
+        size: int = 0
+
+        if isinstance(data_or_path, (str, Path)):
+            file_path = Path(data_or_path)
+            if file_path.is_file():
+                size = file_path.stat().st_size
+        elif isinstance(data_or_path, (bytes, bytearray)):
+            size = len(data_or_path)
+
+        # If file is over standard 48MB limit and Developer API is available, use Developer API
+        if size > 48 * 1024 * 1024 and is_telethon_available():
+            target_input = file_path if file_path else data_or_path
+            logger.info(
+                "Sending large document %s (%.1f MB) via Developer API",
+                filename,
+                size / (1024 * 1024),
             )
+            success = await upload_large_file(
+                chat_id=chat_id,
+                file_input=target_input,
+                filename=filename,
+                caption=caption,
+                message_thread_id=tid,
+            )
+            if success:
+                continue
+            logger.warning(
+                "Developer API upload failed for %s, falling back to standard API",
+                filename,
+            )
+
+        # Standard Bot API upload (<= 50MB)
+        try:
+            if file_path:
+                with open(file_path, "rb") as f:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=filename,
+                        caption=caption,
+                        message_thread_id=tid,
+                        **kwargs,
+                    )
+            else:
+                bio = io.BytesIO(data_or_path)  # type: ignore[arg-type]
+                bio.name = filename
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=bio,
+                    filename=filename,
+                    caption=caption,
+                    message_thread_id=tid,
+                    **kwargs,
+                )
         except RetryAfter:
             raise
         except Exception as e:
+            # Fall back to Developer API if standard Bot API upload failed and Developer API is configured
+            if is_telethon_available() and size > 0:
+                logger.warning(
+                    "Standard bot upload failed (%s). Retrying %s via Developer API",
+                    e,
+                    filename,
+                )
+                target_input = file_path if file_path else data_or_path
+                dev_success = await upload_large_file(
+                    chat_id=chat_id,
+                    file_input=target_input,
+                    filename=filename,
+                    caption=caption,
+                    message_thread_id=tid,
+                )
+                if dev_success:
+                    continue
             logger.error("Failed to send document %s to %d: %s", filename, chat_id, e)

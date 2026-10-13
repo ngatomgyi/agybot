@@ -113,6 +113,8 @@ EXISTING_CMD="agy --mode accept-edits --dangerously-skip-permissions"
 EXISTING_TMUX="agybot"
 EXISTING_TOOLS="true"
 EXISTING_THINKING="true"
+EXISTING_API_ID=""
+EXISTING_API_HASH=""
 
 if [ -f "${ENV_FILE}" ]; then
     EXISTING_TOKEN=$(grep -E "^TELEGRAM_BOT_TOKEN=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)
@@ -121,6 +123,8 @@ if [ -f "${ENV_FILE}" ]; then
     EXISTING_TMUX=$(grep -E "^TMUX_SESSION_NAME=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "${EXISTING_TMUX}")
     EXISTING_TOOLS=$(grep -E "^AGYBOT_SHOW_TOOL_CALLS=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "true")
     EXISTING_THINKING=$(grep -E "^AGYBOT_SHOW_THINKING=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || echo "true")
+    EXISTING_API_ID=$(grep -E "^TELEGRAM_API_ID=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)
+    EXISTING_API_HASH=$(grep -E "^TELEGRAM_API_HASH=" "${ENV_FILE}" | cut -d'=' -f2- | tr -d '"' || true)
 elif [ -f "${HOME}/.ccbot/.env" ]; then
     # Smart import from ccbot if available
     EXISTING_TOKEN=$(grep -E "^TELEGRAM_BOT_TOKEN=" "${HOME}/.ccbot/.env" | cut -d'=' -f2- | tr -d '"' || true)
@@ -234,6 +238,40 @@ else
     echo -e " ${INFO} Caveman mode: ${BOLD}disabled${RESET} (normal detailed style)"
 fi
 
+# 2.7 Telegram Developer API (Large File Uploads up to 2GB)
+echo -e "\n${BOLD}Telegram Developer API (Large File Uploads up to 2GB):${RESET}"
+echo -e "${DIM}Standard Telegram bot upload limit is 50MB. With API ID & Hash from https://my.telegram.org,${RESET}"
+echo -e "${DIM}agybot can upload large binaries, APKs, and build artifacts up to 2,000MB (2GB).${RESET}"
+
+if [ -n "${EXISTING_API_ID}" ]; then
+    read -r -p "Telegram API ID [press Enter to keep ${EXISTING_API_ID}, or 'none' to disable]: " INPUT_API_ID
+    if [ "${INPUT_API_ID,,}" = "none" ]; then
+        API_ID=""
+        API_HASH=""
+    elif [ -n "${INPUT_API_ID}" ]; then
+        API_ID="${INPUT_API_ID}"
+    else
+        API_ID="${EXISTING_API_ID}"
+    fi
+else
+    read -r -p "Telegram API ID [Optional, press Enter to skip]: " INPUT_API_ID
+    API_ID="${INPUT_API_ID}"
+fi
+
+if [ -n "${API_ID}" ]; then
+    if [ -n "${EXISTING_API_HASH}" ]; then
+        MASKED_HASH="${EXISTING_API_HASH:0:6}...${EXISTING_API_HASH: -4}"
+        read -r -p "Telegram API Hash [press Enter to keep ${MASKED_HASH}]: " INPUT_API_HASH
+        API_HASH="${INPUT_API_HASH:-${EXISTING_API_HASH}}"
+    else
+        read -r -p "Telegram API Hash: " API_HASH
+    fi
+    echo -e " ${SUCCESS} Telegram Developer API: ${BOLD}configured (2GB upload mode enabled)${RESET}"
+else
+    API_HASH=""
+    echo -e " ${INFO} Telegram Developer API: ${BOLD}skipped${RESET} (standard 50MB bot upload limit)"
+fi
+
 # Write .env file
 cat << EOF > "${ENV_FILE}"
 # agybot configuration
@@ -247,6 +285,8 @@ AGYBOT_SHOW_THINKING=${SHOW_THINKING}
 AGYBOT_SHOW_USER_MESSAGES=false
 AGYBOT_AUTO_RENAME_TOPICS=true
 CAVEMAN_DEFAULT_MODE=${CAVEMAN_MODE}
+TELEGRAM_API_ID="${API_ID}"
+TELEGRAM_API_HASH="${API_HASH}"
 EOF
 
 # Sync to ~/.agybot/.env as fallback

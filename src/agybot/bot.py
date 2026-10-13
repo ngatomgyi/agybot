@@ -570,8 +570,18 @@ async def artifacts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 continue
             try:
                 sz = bf.stat().st_size
-                if sz <= 48 * 1024 * 1024:
-                    artifacts.append((bf.name, bf.read_bytes()))
+                from .telethon_uploader import is_telethon_available
+
+                max_bot_size = (
+                    2000 * 1024 * 1024
+                    if is_telethon_available()
+                    else 48 * 1024 * 1024
+                )
+                if sz <= max_bot_size:
+                    if sz > 48 * 1024 * 1024:
+                        artifacts.append((bf.name, bf))
+                    else:
+                        artifacts.append((bf.name, bf.read_bytes()))
                     seen_names.add(bf.name)
                 else:
                     oversized.append((bf.name, sz / (1024 * 1024), str(bf)))
@@ -593,11 +603,14 @@ async def artifacts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
 
     if oversized:
-        text = (
-            "⚠️ The following build artifacts exceed Telegram's 50MB bot upload limit:\n"
-        )
+        from .telethon_uploader import is_telethon_available
+
+        limit_desc = "2GB" if is_telethon_available() else "50MB"
+        text = f"⚠️ The following build artifacts exceed Telegram's {limit_desc} upload limit:\n"
         for name, sz_mb, path in oversized:
             text += f"• `{name}` ({sz_mb:.1f} MB)\n  📍 `{path}`\n"
+        if not is_telethon_available():
+            text += "\n💡 _Tip: Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in .env to send files up to 2GB._"
         await safe_reply(update.message, text)
 
 
@@ -1365,7 +1378,22 @@ async def post_init(application: Application) -> None:
 
     # Start terminal status polling loop
     asyncio.create_task(status_poll_loop(application.bot))
+
+    # Initialize Telegram Developer API client if configured
+    from .telethon_uploader import get_telethon_client, is_telethon_available
+
+    if is_telethon_available():
+        asyncio.create_task(get_telethon_client())
+
     logger.info("agybot post_init complete")
+
+
+async def post_shutdown(application: Application) -> None:
+    """Post shutdown hook: disconnect Telethon MTProto client."""
+    from .telethon_uploader import close_telethon_client
+
+    await close_telethon_client()
+    logger.info("agybot post_shutdown complete")
 
 
 def create_bot() -> Application:
@@ -1382,6 +1410,7 @@ def create_bot() -> Application:
         .token(config.telegram_bot_token)
         .rate_limiter(rate_limiter)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
 

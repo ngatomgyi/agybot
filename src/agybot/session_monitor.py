@@ -391,17 +391,33 @@ class SessionMonitor:
                             continue
 
                         size = cp.stat().st_size
-                        if size <= 48 * 1024 * 1024:
+                        from .telethon_uploader import is_telethon_available
+
+                        max_bot_size = (
+                            2000 * 1024 * 1024
+                            if is_telethon_available()
+                            else 48 * 1024 * 1024
+                        )
+                        if size <= max_bot_size:
                             if cp.name not in seen_names:
-                                docs_to_send.append((cp.name, cp.read_bytes()))
+                                # Stream from disk for large files (> 48MB)
+                                if size > 48 * 1024 * 1024:
+                                    docs_to_send.append((cp.name, cp))
+                                else:
+                                    docs_to_send.append((cp.name, cp.read_bytes()))
                                 seen_names.add(cp.name)
                                 sent_map[cand_path] = mtime
                         else:
                             sent_map[cand_path] = mtime
                             sz_mb = size / (1024 * 1024)
-                            oversized_notices.append(
-                                f"⚠️ Build output `{cp.name}` ({sz_mb:.1f} MB) exceeds Telegram's 50MB bot upload limit.\n📍 Saved on host at: `{cp}`"
-                            )
+                            if is_telethon_available():
+                                oversized_notices.append(
+                                    f"⚠️ Build output `{cp.name}` ({sz_mb:.1f} MB) exceeds Telegram's 2GB upload limit.\n📍 Saved on host at: `{cp}`"
+                                )
+                            else:
+                                oversized_notices.append(
+                                    f"⚠️ Build output `{cp.name}` ({sz_mb:.1f} MB) exceeds Telegram's 50MB bot upload limit.\n💡 Configure TELEGRAM_API_ID and TELEGRAM_API_HASH in .env to send files up to 2GB.\n📍 Saved on host at: `{cp}`"
+                                )
                     except Exception as err:
                         logger.warning("Could not read artifact %s: %s", cand_path, err)
 

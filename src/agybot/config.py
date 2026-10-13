@@ -25,6 +25,8 @@ SENSITIVE_ENV_VARS: set[str] = {
     "TELEGRAM_BOT_TOKEN",
     "BOT_TOKEN",
     "ALLOWED_USERS",
+    "TELEGRAM_API_ID",
+    "TELEGRAM_API_HASH",
 }
 
 
@@ -74,6 +76,11 @@ class Config:
 
         if not self.allowed_users:
             raise ValueError("ALLOWED_USERS must contain at least one valid user ID")
+
+        # Telegram Developer API credentials (optional, for uploading files up to 2GB)
+        api_id_raw = os.getenv("TELEGRAM_API_ID", "").strip()
+        self.telegram_api_id: int | None = int(api_id_raw) if api_id_raw.isdigit() else None
+        self.telegram_api_hash: str = os.getenv("TELEGRAM_API_HASH", "").strip()
 
         # Tmux session name and main window
         self.tmux_session_name = os.getenv("TMUX_SESSION_NAME", "agybot")
@@ -126,6 +133,11 @@ class Config:
             os.getenv("AGYBOT_AUTO_RENAME_TOPICS", "true").lower() == "true"
         )
         self.caveman_default_mode = os.getenv("CAVEMAN_DEFAULT_MODE", "full").lower()
+
+    @property
+    def has_telegram_developer_api(self) -> bool:
+        """Whether Telegram Developer API credentials (API ID & Hash) are configured."""
+        return bool(self.telegram_api_id and self.telegram_api_hash)
 
 
 config = Config.__new__(Config)

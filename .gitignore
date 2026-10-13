@@ -11,3 +11,6 @@ build/
 .coverage
 htmlcov/
 .DS_Store
+attachments/
+*.session
+*.session-journal
