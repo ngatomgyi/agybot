@@ -97,19 +97,31 @@ _EXPQUOTE_MAX_RENDERED = 3800
 
 def _render_expandable_quote(m: re.Match[str]) -> str:
     inner = m.group(1)
+    max_raw = 2800
+    suffix = "\n>… \\(truncated\\)||"
+    truncated = False
+    if len(inner) > max_raw:
+        inner = inner[:max_raw]
+        last_nl = inner.rfind("\n")
+        if last_nl > max_raw - 400:
+            inner = inner[:last_nl]
+        truncated = True
+
     escaped = _escape_mdv2(inner)
     lines = escaped.split("\n")
     built: list[str] = []
     total_len = 0
-    suffix = "\n>… \\(truncated\\)||"
     budget = _EXPQUOTE_MAX_RENDERED - len(suffix)
-    truncated = False
     for line in lines:
         line_cost = 1 + len(line) + 1
         if total_len + line_cost > budget:
             remaining = budget - total_len - 2
             if remaining > 20:
-                built.append(f">{line[:remaining]}")
+                chunk = line[:remaining]
+                bs_count = len(chunk) - len(chunk.rstrip("\\"))
+                if bs_count % 2 == 1:
+                    chunk = chunk[:-1]
+                built.append(f">{chunk}")
             truncated = True
             break
         built.append(f">{line}")

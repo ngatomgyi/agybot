@@ -604,11 +604,13 @@ async def _process_thinking_task(
                 current_thoughts.append(nt)
 
     combined_inner = "\n\n".join(current_thoughts)
-    max_inner = 3500
+    max_inner = 2500
     if len(combined_inner) > max_inner:
-        combined_inner = (
-            "… (earlier thoughts truncated)\n\n" + combined_inner[-(max_inner - 35) :]
-        )
+        tail = combined_inner[-(max_inner - 35) :]
+        first_nl = tail.find("\n")
+        if first_nl != -1 and first_nl < 200:
+            tail = tail[first_nl + 1 :]
+        combined_inner = "… (earlier thoughts truncated)\n\n" + tail
 
     combined_text = (
         f"💭 *Thought:*\n"
@@ -626,6 +628,7 @@ async def _process_thinking_task(
             return
 
         # Actively edit existing thought message in-place
+        recreate_message = False
         try:
             res = await safe_edit_message(
                 bot,
@@ -649,10 +652,16 @@ async def _process_thinking_task(
             ):
                 _thought_msg_info.pop(key, None)
                 _save_thought_msg_info()
+                recreate_message = True
             else:
                 logger.warning("Could not edit thought message: %s", e)
+                return
         except Exception as e:
             logger.warning("Unexpected error editing thought message: %s", e)
+            return
+
+        if not recreate_message:
+            return
 
     # Send new thought message and track it for this turn
     try:
@@ -705,12 +714,13 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
         t_info = _thought_msg_info.get(k)
         if t_info and t_info.thoughts:
             combined_inner = "\n\n".join(t_info.thoughts)
-            max_inner = 3500
+            max_inner = 2500
             if len(combined_inner) > max_inner:
-                combined_inner = (
-                    "… (earlier thoughts truncated)\n\n"
-                    + combined_inner[-(max_inner - 35) :]
-                )
+                tail = combined_inner[-(max_inner - 35) :]
+                first_nl = tail.find("\n")
+                if first_nl != -1 and first_nl < 200:
+                    tail = tail[first_nl + 1 :]
+                combined_inner = "… (earlier thoughts truncated)\n\n" + tail
             combined_text = (
                 f"💭 *Thought:*\n"
                 f"{TranscriptParser.EXPANDABLE_QUOTE_START}{combined_inner}{TranscriptParser.EXPANDABLE_QUOTE_END}"

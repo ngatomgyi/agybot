@@ -30,6 +30,28 @@ PARSE_MODE = ParseMode.MARKDOWN_V2
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
+def _clean_plaintext_fallback(text: str) -> str:
+    """Clean internal formatting delimiters and convert expandable quotes to readable plain text."""
+    import re
+    from ..transcript_parser import TranscriptParser
+
+    start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
+    end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
+
+    if start_tag in text and end_tag in text:
+        def _quote_repl(m: re.Match[str]) -> str:
+            inner = m.group(1).strip()
+            quoted_lines = [f"> {line}" for line in inner.split("\n")]
+            return "\n".join(quoted_lines)
+
+        pattern = re.escape(start_tag) + r"([\s\S]*?)" + re.escape(end_tag)
+        text = re.sub(pattern, _quote_repl, text)
+
+    text = text.replace(start_tag, "").replace(end_tag, "")
+    text = re.sub(r"\x02EXPQUOTE_\d+\x02", "", text)
+    return text
+
+
 async def send_with_fallback(
     send_fn: Any,
     text: str,
@@ -39,17 +61,18 @@ async def send_with_fallback(
     """Send text with MarkdownV2 formatting, falling back to plain text on error."""
     converted = convert_markdown(text)
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
+    plain_clean = _clean_plaintext_fallback(text)
 
     # Pre-check: if rendered MarkdownV2 exceeds Telegram limit, fall back to plain text if plain text fits
     if utf16_len(converted) > TELEGRAM_MAX_MESSAGE_LENGTH:
-        if utf16_len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+        if utf16_len(plain_clean) <= TELEGRAM_MAX_MESSAGE_LENGTH:
             logger.warning(
                 "Rendered MarkdownV2 (%d code units) exceeds limit, sending plain text (%d code units)",
                 utf16_len(converted),
-                utf16_len(text),
+                utf16_len(plain_clean),
             )
             kwargs.pop("parse_mode", None)
-            return await send_fn(text, *args, **kwargs)
+            return await send_fn(plain_clean, *args, **kwargs)
 
     try:
         return await send_fn(converted, *args, parse_mode=PARSE_MODE, **kwargs)
@@ -58,15 +81,15 @@ async def send_with_fallback(
         if "can't parse entities" in err_str or "entity" in err_str:
             logger.warning("MarkdownV2 parsing failed (%s), sending plain text", e)
             kwargs.pop("parse_mode", None)
-            return await send_fn(text, *args, **kwargs)
+            return await send_fn(plain_clean, *args, **kwargs)
         if "message is too long" in err_str:
-            if utf16_len(text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            if utf16_len(plain_clean) <= TELEGRAM_MAX_MESSAGE_LENGTH:
                 logger.warning(
                     "Telegram rejected MarkdownV2 as too long, sending plain text (%d code units)",
-                    utf16_len(text),
+                    utf16_len(plain_clean),
                 )
                 kwargs.pop("parse_mode", None)
-                return await send_fn(text, *args, **kwargs)
+                return await send_fn(plain_clean, *args, **kwargs)
         raise
 
 

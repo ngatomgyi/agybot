@@ -31,11 +31,11 @@ def build_response_parts(
             text = text[:3000] + "…"
         return [f"👤 {text}"]
 
-    # Truncate thinking if necessary
-    if content_type == "thinking" and is_complete:
+    # Truncate thinking if necessary and return as single part (handled in-place by queue)
+    if content_type == "thinking":
         start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
         end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
-        max_thinking = 3500
+        max_thinking = 2500
 
         if start_tag in text and end_tag in text:
             prefix = text[: text.index(start_tag)]
@@ -45,6 +45,7 @@ def build_response_parts(
             text = f"{prefix}{start_tag}{inner}{end_tag}"
         elif len(text) > max_thinking:
             text = text[:max_thinking] + "\n\n… (thinking truncated)"
+        return [text]
 
     chunks = split_markdown_for_telegram(text)
     if len(chunks) > 1:

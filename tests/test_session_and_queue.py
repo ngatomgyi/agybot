@@ -894,4 +894,110 @@ async def test_send_with_fallback_plain_text_on_too_long():
     assert send_fn.call_args.args[0] == text
 
 
+@pytest.mark.asyncio
+async def test_thinking_edit_error_never_duplicates_or_splits():
+    from agybot.handlers.message_queue import (
+        ThoughtMessageInfo,
+        _process_thinking_task,
+        _thought_msg_info,
+        clear_thought_msg_info,
+    )
+    from agybot.session import session_manager
+    from telegram.error import BadRequest
+
+    user_id = 1227075616
+    thread_id = 178763
+    chat_id = 1227075616
+    session_manager.group_chat_ids[f"{chat_id}:{thread_id}"] = chat_id
+
+    clear_thought_msg_info(user_id, thread_id)
+    _thought_msg_info[(user_id, thread_id)] = ThoughtMessageInfo(
+        message_id=999,
+        thoughts=["Initial thought"],
+        last_edit_time=0.0,
+        chat_id=chat_id,
+    )
+
+    mock_bot = MagicMock()
+    mock_bot.edit_message_text = AsyncMock(
+        side_effect=BadRequest("Message is too long")
+    )
+    mock_bot.send_message = AsyncMock()
+
+    task = MessageTask(
+        task_type="content",
+        content_type="thinking",
+        parts=["A very long additional thought that causes edit to fail"],
+        thread_id=thread_id,
+    )
+
+    await _process_thinking_task(mock_bot, chat_id, user_id, task, {})
+
+    # safe_send (mock_bot.send_message) MUST NOT have been called!
+    mock_bot.send_message.assert_not_called()
+    # Tracking remains for the message
+    assert (user_id, thread_id) in _thought_msg_info
+
+
+def test_response_builder_thinking_never_chunked_or_paginated():
+    from agybot.handlers.response_builder import build_response_parts
+    from agybot.transcript_parser import TranscriptParser
+
+    inner = "Very long thought content line.\n" * 200
+    text = (
+        f"💭 *Thought:*\n"
+        f"{TranscriptParser.EXPANDABLE_QUOTE_START}{inner}{TranscriptParser.EXPANDABLE_QUOTE_END}"
+    )
+
+    parts = build_response_parts(
+        text=text,
+        is_complete=True,
+        content_type="thinking",
+    )
+
+    assert len(parts) == 1
+    assert "[1/" not in parts[0]
+    assert "[2/" not in parts[0]
+
+
+def test_render_expandable_quote_no_dangling_backslash_and_bounded():
+    import re
+    from agybot.markdown_v2 import _EXPQUOTE_MAX_RENDERED, _render_expandable_quote
+
+    raw_text = "hello.world-test_foo(bar)[baz]*italic*`code`!#+=\n" * 150
+    m = re.match(r"([\s\S]*)", raw_text)
+    assert m is not None
+
+    rendered = _render_expandable_quote(m)
+    assert len(rendered) <= _EXPQUOTE_MAX_RENDERED
+
+    # Ensure no line ends with a dangling backslash
+    for i, line in enumerate(rendered.split("\n")):
+        bs_count = len(line) - len(line.rstrip("\\"))
+        assert bs_count % 2 == 0, f"Line {i} has dangling backslash: {line!r}"
+
+
+@pytest.mark.asyncio
+async def test_send_with_fallback_cleans_expandable_quote_tokens():
+    from agybot.handlers.message_sender import send_with_fallback
+    from agybot.transcript_parser import TranscriptParser
+    from telegram.error import BadRequest
+
+    send_fn = AsyncMock(side_effect=[BadRequest("Can't parse entities"), MagicMock()])
+
+    text = (
+        f"💭 *Thought:*\n"
+        f"{TranscriptParser.EXPANDABLE_QUOTE_START}Step 1\nStep 2{TranscriptParser.EXPANDABLE_QUOTE_END}"
+    )
+
+    await send_with_fallback(send_fn, text)
+
+    assert send_fn.call_count == 2
+    fallback_text = send_fn.call_args_list[1].args[0]
+    assert TranscriptParser.EXPANDABLE_QUOTE_START not in fallback_text
+    assert TranscriptParser.EXPANDABLE_QUOTE_END not in fallback_text
+    assert "> Step 1" in fallback_text
+    assert "> Step 2" in fallback_text
+
+
 
